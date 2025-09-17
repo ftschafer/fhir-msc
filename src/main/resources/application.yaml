@@ -38,12 +38,20 @@ management:
 spring:
   main:
     allow-circular-references: true
+  devtools:
+    restart:
+      enabled: false
   flyway:
     enabled: false
     baselineOnMigrate: true
     fail-on-missing-locations: false
   datasource:
-    #url: 'jdbc:h2:file:./target/database/h2'
+    # url: jdbc:postgresql://hapi-fhir-postgres:5432/hapi
+    # username: admin
+    # password: admin
+    # driverClassName: org.postgresql.Driver
+    # max-active: 15
+
     url: jdbc:h2:mem:test_mem
     username: sa
     password: null
@@ -62,7 +70,8 @@ spring:
       #If using H2, then supply the value of ca.uhn.fhir.jpa.model.dialect.HapiFhirH2Dialect
       #If using postgres, then supply the value of ca.uhn.fhir.jpa.model.dialect.HapiFhirPostgresDialect
       hibernate.dialect: ca.uhn.fhir.jpa.model.dialect.HapiFhirH2Dialect
-  #      hibernate.hbm2ddl.auto: update
+      # hibernate.dialect: ca.uhn.fhir.jpa.model.dialect.HapiFhirPostgresDialect
+      hibernate.hbm2ddl.auto: update
   #      hibernate.jdbc.batch_size: 20
   #      hibernate.cache.use_query_cache: false
   #      hibernate.cache.use_second_level_cache: false
@@ -120,7 +129,7 @@ hapi:
           # require_from_keyword: false
           # disable_default_model_info_load: false
         runtime:
-          debug_logging_enabled: false
+          debug_logging_enabled: true
           # enable_validation: false
           # enable_expression_caching: true
         terminology:

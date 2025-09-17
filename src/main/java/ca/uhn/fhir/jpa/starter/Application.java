@@ -4,6 +4,7 @@ import ca.uhn.fhir.batch2.jobs.config.Batch2JobsConfig;
 import ca.uhn.fhir.jpa.batch2.JpaBatch2Config;
 import ca.uhn.fhir.jpa.starter.annotations.OnEitherVersion;
 import ca.uhn.fhir.jpa.starter.cdshooks.StarterCdsHooksConfig;
+import ca.uhn.fhir.jpa.starter.common.News2Aggregate;
 import ca.uhn.fhir.jpa.starter.cr.StarterCrDstu3Config;
 import ca.uhn.fhir.jpa.starter.cr.StarterCrR4Config;
 import ca.uhn.fhir.jpa.starter.mdm.MdmConfig;
@@ -16,6 +17,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.config.AutowireCapableBeanFactory;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.boot.autoconfigure.domain.EntityScan;
 import org.springframework.boot.autoconfigure.elasticsearch.ElasticsearchRestClientAutoConfiguration;
 import org.springframework.boot.autoconfigure.thymeleaf.ThymeleafAutoConfiguration;
 import org.springframework.boot.web.servlet.ServletComponentScan;
@@ -24,9 +26,15 @@ import org.springframework.boot.web.servlet.support.SpringBootServletInitializer
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Conditional;
 import org.springframework.context.annotation.Import;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 @ServletComponentScan(basePackageClasses = {RestfulServer.class})
-@SpringBootApplication(exclude = {ElasticsearchRestClientAutoConfiguration.class, ThymeleafAutoConfiguration.class})
+@SpringBootApplication(
+    exclude = {ElasticsearchRestClientAutoConfiguration.class, ThymeleafAutoConfiguration.class},
+    scanBasePackages = {"ca.uhn.fhir.jpa.starter", "ca.uhn.fhir.jpa.starter.common"}
+)
+@EntityScan(basePackages = {"ca.uhn.fhir.jpa.starter.common", "ca.uhn.fhir.jpa.model.entity"})
 @Import({
 	StarterCrR4Config.class,
 	StarterCrDstu3Config.class,
@@ -40,6 +48,7 @@ import org.springframework.context.annotation.Import;
 	Batch2JobsConfig.class
 })
 public class Application extends SpringBootServletInitializer {
+	private static final Logger ourLog = LoggerFactory.getLogger(Application.class);
 
 	public static void main(String[] args) {
 

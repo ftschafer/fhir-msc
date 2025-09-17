@@ -92,19 +92,22 @@ import org.springframework.http.HttpHeaders;
 import org.springframework.orm.jpa.JpaTransactionManager;
 import org.springframework.orm.jpa.LocalContainerEntityManagerFactoryBean;
 import org.springframework.web.cors.CorsConfiguration;
-
+import ca.uhn.fhir.jpa.starter.common.News2Interceptor;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import javax.sql.DataSource;
+import java.util.Arrays;
+import java.util.ArrayList;
+import java.util.List;
 
 import static ca.uhn.fhir.jpa.starter.common.validation.IRepositoryValidationInterceptorFactory.ENABLE_REPOSITORY_VALIDATING_INTERCEPTOR;
 
 @Configuration
 // allow users to configure custom packages to scan for additional beans
-@ComponentScan(basePackages = {"${hapi.fhir.custom-bean-packages:}"})
+@ComponentScan(basePackages = {"${hapi.fhir.custom-bean-packages:ca.uhn.fhir.jpa.starter.common}"})
 @Import(ThreadPoolFactoryConfig.class)
 public class StarterJpaConfig {
 
@@ -145,26 +148,30 @@ public class StarterJpaConfig {
 		return ResourceCountCacheUtil.newResourceCountCache(theSystemDao);
 	}
 
-	@Primary
-	@Bean
-	public LocalContainerEntityManagerFactoryBean entityManagerFactory(
-			DataSource myDataSource,
-			ConfigurableListableBeanFactory myConfigurableListableBeanFactory,
-			FhirContext theFhirContext,
-			JpaStorageSettings theStorageSettings) {
-		LocalContainerEntityManagerFactoryBean retVal = HapiEntityManagerFactoryUtil.newEntityManagerFactory(
-				myConfigurableListableBeanFactory, theFhirContext, theStorageSettings);
-		retVal.setPersistenceUnitName("HAPI_PU");
+	@Primary 
+    @Bean
+    public LocalContainerEntityManagerFactoryBean entityManagerFactory(
+            DataSource myDataSource,
+            ConfigurableListableBeanFactory myConfigurableListableBeanFactory,
+            FhirContext theFhirContext,
+            JpaStorageSettings theStorageSettings) {
+        LocalContainerEntityManagerFactoryBean retVal = HapiEntityManagerFactoryUtil.newEntityManagerFactory(
+                myConfigurableListableBeanFactory, theFhirContext, theStorageSettings);
+        retVal.setPersistenceUnitName("HAPI_PU");
 
-		try {
-			retVal.setDataSource(myDataSource);
-		} catch (Exception e) {
-			throw new ConfigurationException("Could not set the data source due to a configuration issue", e);
-		}
-		retVal.setJpaProperties(
-				EnvironmentHelper.getHibernateProperties(configurableEnvironment, myConfigurableListableBeanFactory));
-		return retVal;
-	}
+        retVal.setDataSource(myDataSource);
+
+	// Define the packages to scan for JPA entities
+	List<String> pkgs = new ArrayList<>();
+	pkgs.add("ca.uhn.fhir.jpa.model.entity");
+	pkgs.add("ca.uhn.fhir.jpa.entity");
+	pkgs.add("ca.uhn.fhir.jpa.starter.common");
+	retVal.setPackagesToScan(pkgs.toArray(new String[0]));
+
+        retVal.setJpaProperties(
+                EnvironmentHelper.getHibernateProperties(configurableEnvironment, myConfigurableListableBeanFactory));
+        return retVal;
+    }
 
 	@Bean
 	@Primary
@@ -280,6 +287,8 @@ public class StarterJpaConfig {
 			Optional<BinaryAccessProvider> binaryAccessProvider,
 			BinaryStorageInterceptor binaryStorageInterceptor,
 			IValidatorModule validatorModule,
+			// PatientTotalNews2ScoreInterceptor patientTotalNews2ScoreInterceptor,
+			News2AggregationInterceptorDB news2AggregationInterceptorDB,
 			Optional<GraphQLProvider> graphQLProvider,
 			BulkDataExportProvider bulkDataExportProvider,
 			BulkDataImportProvider bulkDataImportProvider,
@@ -313,6 +322,9 @@ public class StarterJpaConfig {
 
 		fhirServer.registerProviders(resourceProviderFactory.createProviders());
 		fhirServer.registerProvider(jpaSystemProvider);
+		fhirServer.registerInterceptor(new News2Interceptor());
+		// fhirServer.registerInterceptor(patientTotalNews2ScoreInterceptor);
+		fhirServer.registerInterceptor(news2AggregationInterceptorDB);
 		fhirServer.setServerConformanceProvider(calculateConformanceProvider(
 				fhirSystemDao, fhirServer, jpaStorageSettings, searchParamRegistry, theValidationSupport));
 

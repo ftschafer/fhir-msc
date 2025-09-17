@@ -21,6 +21,10 @@ RUN mkdir /app && cp /tmp/hapi-fhir-jpaserver-starter/target/ROOT.war /app/main.
 FROM bitnami/tomcat:10.1 AS tomcat
 
 USER root
+
+RUN apt-get update && apt-get install -y curl \
+    && rm -rf /var/lib/apt/lists/*
+    
 RUN rm -rf /opt/bitnami/tomcat/webapps/ROOT && \
     mkdir -p /opt/bitnami/hapi/data/hapi/lucenefiles && \
     chown -R 1001:1001 /opt/bitnami/hapi/data/hapi/lucenefiles && \
