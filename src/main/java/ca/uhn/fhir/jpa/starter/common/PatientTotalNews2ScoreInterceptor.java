@@ -28,7 +28,7 @@ import ca.uhn.fhir.rest.param.TokenParam;
 public class PatientTotalNews2ScoreInterceptor {
 
     private static final Logger logger = LoggerFactory.getLogger(PatientTotalNews2ScoreInterceptor.class);
-    private static final String NEWS2_EXTENSION_URL = "http://example.org/fhir/StructureDefinition/news2-score";
+    private static final String NEWS2_EXTENSION_URL = "http://news2-score";
     private static final String[] NEWS2_LOINC_CODES = {"8867-4", "9279-1", "8310-5", "59408-5", "8480-6"};
 
     private final DaoRegistry daoRegistry;

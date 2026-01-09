@@ -14,7 +14,7 @@ management:
     enabled-by-default: false
     web:
       exposure:
-        include: 'health' # or e.g. 'info,health,prometheus,metrics' or '*' for all
+        include: 'health,info,prometheus' # or e.g. 'info,health,prometheus,metrics' or '*' for all
   endpoint:
     info:
       enabled: true
@@ -36,11 +36,18 @@ management:
       export:
         enabled: true
 spring:
+  h2:
+    console:
+      enabled: true
+      path: /h2-console
   main:
     allow-circular-references: true
   devtools:
     restart:
       enabled: false
+  mvc:
+    media-type:
+      default: application/json
   flyway:
     enabled: false
     baselineOnMigrate: true
@@ -56,15 +63,18 @@ spring:
     username: sa
     password: null
     driverClassName: org.h2.Driver
-    max-active: 15
 
     # database connection pool size
     hikari:
-      maximum-pool-size: 10
+      maximum-pool-size: 50
   jpa:
+    defer-datasource-initialization: true
     properties:
       hibernate.format_sql: false
       hibernate.show_sql: false
+      hibernate.jdbc.batch_size: 100
+      hibernate.order_inserts: true
+      hibernate.order_updates: true
 
       #Hibernate dialect is automatically detected except Postgres and H2.
       #If using H2, then supply the value of ca.uhn.fhir.jpa.model.dialect.HapiFhirH2Dialect
@@ -80,6 +90,12 @@ spring:
 
   ###    These settings will enable fulltext search with lucene or elastic
       hibernate.search.enabled: false
+    hibernate:
+      ddl-auto: none
+  sql:
+    init:
+      mode: always
+      schema-locations: classpath:schema.sql
   ### lucene parameters
 #      hibernate.search.backend.type: lucene
 #      hibernate.search.backend.analysis.configurer: ca.uhn.fhir.jpa.search.HapiHSearchAnalysisConfigurers$HapiLuceneAnalysisConfigurer
@@ -143,7 +159,7 @@ hapi:
           profile_mode: DECLARED # ENFORCED, DECLARED, OPTIONAL, TRUST, OFF
 
     cdshooks:
-      enabled: false
+      enabled: true
       clientIdHeaderName: client_id
 
     ### This enables the swagger-ui at /fhir/swagger-ui/index.html as well as the /fhir/api-docs (see https://hapifhir.io/hapi-fhir/docs/server_plain/openapi.html)
@@ -297,49 +313,7 @@ hapi:
     # number other than -1, the system will never prefetch more than the given number.
     search_prefetch_thresholds: 13,503,2003,-1
 
-    # comma-separated package names, will be @ComponentScan'ed by Spring to allow for creating custom Spring beans
-    #custom-bean-packages:
     
-    # comma-separated list of fully qualified interceptor classes. 
-    # classes listed here will be fetched from the Spring context when combined with 'custom-bean-packages', 
-    # or will be instantiated via reflection using a no-arg constructor; then registered with the server
-    #custom-interceptor-classes:  
-
-    # comma-separated list of fully qualified provider classes. 
-    # classes listed here will be fetched from the Spring context when combined with 'custom-bean-packages', 
-    # or will be instantiated via reflection using a no-arg constructor; then registered with the server
-    #custom-provider-classes:  
-    # specify what should be stored in meta.source based on StoreMetaSourceInformationEnum defaults to NONE
-    # store_meta_source_information: NONE
-    # Threadpool size for BATCH'ed GETs in a bundle.
-    #    bundle_batch_pool_size: 10
-    #    bundle_batch_pool_max_size: 50
-
-    #    logger:
-    #      error_format: 'ERROR - ${requestVerb} ${requestUrl}'
-    #      format: >-
-    #        Path[${servletPath}] Source[${requestHeader.x-forwarded-for}]
-    #        Operation[${operationType} ${operationName} ${idOrResourceName}]
-    #        UA[${requestHeader.user-agent}] Params[${requestParameters}]
-    #        ResponseEncoding[${responseEncodingNoDefault}]
-    #      log_exceptions: true
-    #      name: fhirtest.access
-    #    max_binary_size: 104857600
-    #    max_page_size: 200
-    #    retain_cached_searches_mins: 60
-    #    reuse_cached_search_results_millis: 60000
-    # The remote_terminology_service block is commented out by default because it requires external terminology service endpoints.
-    # Uncomment and configure the block below if you need to enable remote terminology validation or mapping.
-    #remote_terminology_service:
-    #  all:
-    #    system: '*'
-    #    url: 'https://tx.fhir.org/r4/'
-    #  snomed:
-    #    system: 'http://snomed.info/sct'
-    #    url: 'https://tx.fhir.org/r4/'
-    #  loinc:
-    #    system: 'http://loinc.org'
-    #    url: 'https://hapi.fhir.org/baseR4/'
     tester:
       home:
         name: Local Tester
@@ -357,9 +331,9 @@ hapi:
     #    binary_storage_enabled: true
     inline_resource_storage_below_size: 4000
 #    bulk_export_enabled: true
-#    subscription:
-#      resthook_enabled: true
-#      websocket_enabled: false
+    subscription:
+      resthook_enabled: true
+      websocket_enabled: true
 #      polling_interval_ms: 5000
 #      immediately_queued: false
 #      email:
@@ -372,7 +346,7 @@ hapi:
 #        startTlsEnable:
 #        startTlsRequired:
 #        quitWait:
-#    lastn_enabled: true
+    lastn_enabled: false
 #    store_resource_in_lucene_index_enabled: true
 ###  This is configuration for normalized quantity search level default is 0
 ###   0: NORMALIZED_QUANTITY_SEARCH_NOT_SUPPORTED - default
@@ -390,3 +364,10 @@ hapi:
 #  protocol: 'http'
 #  schema_management_strategy: CREATE
 #  username: SomeUsername
+logging:
+  level:
+    ca.uhn.fhir: warn
+    org.hibernate.SQL: off
+upstream:
+  fhir:
+    base-url: http://18.218.25.8:8081/fhir

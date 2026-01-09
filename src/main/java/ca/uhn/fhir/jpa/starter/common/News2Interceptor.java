@@ -22,7 +22,7 @@ import org.slf4j.LoggerFactory;
 public class News2Interceptor {
     private final Logger ourLog = LoggerFactory.getLogger(News2Interceptor.class);
 
-    private static final String NEWS2_EXTENSION_URL = "http://example.org/fhir/StructureDefinition/news2-score";
+    private static final String NEWS2_EXTENSION_URL = "http://news2-score";
     
     // This hook runs for every Observation created in storage (not just HTTP)
     @Hook(Pointcut.STORAGE_PRESTORAGE_RESOURCE_CREATED)

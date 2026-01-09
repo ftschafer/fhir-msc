@@ -31,7 +31,7 @@ import org.slf4j.LoggerFactory;
 public class PatientTotalNews2ScoreInterceptorCQL {
 
     private static final Logger logger = LoggerFactory.getLogger(PatientTotalNews2ScoreInterceptor.class);
-    private static final String NEWS2_EXTENSION_URL = "http://example.org/fhir/StructureDefinition/news2-score";
+    private static final String NEWS2_EXTENSION_URL = "http://news2-score";
 
     private final DaoRegistry daoRegistry;
     private final FhirContext fhirContext;

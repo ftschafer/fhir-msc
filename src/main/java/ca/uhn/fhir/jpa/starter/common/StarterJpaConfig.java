@@ -289,6 +289,7 @@ public class StarterJpaConfig {
 			IValidatorModule validatorModule,
 			// PatientTotalNews2ScoreInterceptor patientTotalNews2ScoreInterceptor,
 			News2AggregationInterceptorDB news2AggregationInterceptorDB,
+			ObservationBlockInterceptor observationBlockInterceptor,
 			Optional<GraphQLProvider> graphQLProvider,
 			BulkDataExportProvider bulkDataExportProvider,
 			BulkDataImportProvider bulkDataImportProvider,
@@ -325,6 +326,7 @@ public class StarterJpaConfig {
 		fhirServer.registerInterceptor(new News2Interceptor());
 		// fhirServer.registerInterceptor(patientTotalNews2ScoreInterceptor);
 		fhirServer.registerInterceptor(news2AggregationInterceptorDB);
+		fhirServer.registerInterceptor(observationBlockInterceptor);
 		fhirServer.setServerConformanceProvider(calculateConformanceProvider(
 				fhirSystemDao, fhirServer, jpaStorageSettings, searchParamRegistry, theValidationSupport));
 
