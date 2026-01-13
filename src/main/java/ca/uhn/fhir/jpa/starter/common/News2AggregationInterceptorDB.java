@@ -32,7 +32,7 @@ public class News2AggregationInterceptorDB {
     private static final String TX_OBS_KEY = News2AggregationInterceptorDB.class.getName() + ".OBS_SET";
 
     // Use the same extension URL as PatientTotalNews2ScoreInterceptor
-    private static final String NEWS2_EXTENSION_URL = "http://example.org/fhir/StructureDefinition/news2-score";
+    private static final String NEWS2_EXTENSION_URL = "http://news2-score";
 
     private final News2AggregationService aggregationService;
     private final ExecutorService executor = Executors.newSingleThreadExecutor();

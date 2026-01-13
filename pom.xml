@@ -122,6 +122,16 @@
             <artifactId>cqf-fhir-cr-hapi</artifactId>
             <version>${clinical-reasoning.version}</version>
         </dependency>
+        <dependency>
+            <groupId>io.micrometer</groupId>
+            <artifactId>micrometer-registry-prometheus</artifactId>
+            <version>1.11.0</version>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-actuator</artifactId>
+        </dependency>
+        
         <!-- This dependency includes the JPA MDM Server -->
         <dependency>
             <groupId>ca.uhn.hapi.fhir</groupId>

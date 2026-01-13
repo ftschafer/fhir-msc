@@ -92,7 +92,6 @@ import org.springframework.http.HttpHeaders;
 import org.springframework.orm.jpa.JpaTransactionManager;
 import org.springframework.orm.jpa.LocalContainerEntityManagerFactoryBean;
 import org.springframework.web.cors.CorsConfiguration;
-import ca.uhn.fhir.jpa.starter.common.News2Interceptor;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
@@ -289,6 +288,8 @@ public class StarterJpaConfig {
 			IValidatorModule validatorModule,
 			// PatientTotalNews2ScoreInterceptor patientTotalNews2ScoreInterceptor,
 			News2AggregationInterceptorDB news2AggregationInterceptorDB,
+			ObservationBlockInterceptor observationBlockInterceptor,
+			PatientBlockInterceptor patientBlockInterceptor,
 			Optional<GraphQLProvider> graphQLProvider,
 			BulkDataExportProvider bulkDataExportProvider,
 			BulkDataImportProvider bulkDataImportProvider,
@@ -322,9 +323,10 @@ public class StarterJpaConfig {
 
 		fhirServer.registerProviders(resourceProviderFactory.createProviders());
 		fhirServer.registerProvider(jpaSystemProvider);
-		fhirServer.registerInterceptor(new News2Interceptor());
 		// fhirServer.registerInterceptor(patientTotalNews2ScoreInterceptor);
 		fhirServer.registerInterceptor(news2AggregationInterceptorDB);
+		fhirServer.registerInterceptor(observationBlockInterceptor);
+		fhirServer.registerInterceptor(patientBlockInterceptor);
 		fhirServer.setServerConformanceProvider(calculateConformanceProvider(
 				fhirSystemDao, fhirServer, jpaStorageSettings, searchParamRegistry, theValidationSupport));
 

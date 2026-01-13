@@ -19,7 +19,7 @@ import org.springframework.stereotype.Service;
 @Service
 public class News2AggregationService {
     private static final Logger logger = LoggerFactory.getLogger(News2AggregationService.class);
-    private static final String NEWS2_EXTENSION_URL = "http://example.org/fhir/StructureDefinition/news2-score";
+    private static final String NEWS2_EXTENSION_URL = "http://news2-score";
     private static final Set<String> LOINC_CODES = Set.of("8867-4","9279-1","8310-5","59408-5","8480-6");
 
     @PersistenceContext
@@ -152,5 +152,17 @@ public class News2AggregationService {
             a.setObservedAt(obsAt);
             em.merge(a);
         }
+    }
+
+    @Transactional
+    public Set<String> processBundleObservationsReturningPatients(List<Observation> observations) {
+        processBundleObservations(observations);
+        Set<String> ids = new java.util.HashSet<>();
+        for (Observation o : observations) {
+            if (o.getSubject() != null && o.getSubject().getReference() != null && o.getSubject().getReference().startsWith("Patient/")) {
+                ids.add(o.getSubject().getReference().substring("Patient/".length()));
+            }
+        }
+        return ids;
     }
 }
