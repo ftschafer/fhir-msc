@@ -15,6 +15,10 @@ import org.hl7.fhir.r4.model.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.Timer;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 @Service
 public class News2AggregationService {
@@ -22,15 +26,24 @@ public class News2AggregationService {
     private static final String NEWS2_EXTENSION_URL = "http://news2-score";
     private static final Set<String> LOINC_CODES = Set.of("8867-4","9279-1","8310-5","59408-5","8480-6");
 
+    // Metrics
+    private static final String METRIC_PROCESSING = "fhir_news2_processing_seconds";
+    private static final String METRIC_DB = "fhir_news2_db_update_seconds";
+    private static final String METRIC_UPSTREAM = "fhir_news2_upstream_seconds";
+    private static final String METRIC_PATIENTS = "fhir_news2_patients_processed_total";
+    private static final String METRIC_OUTCOME = "fhir_news2_patient_update_total";
+
     @PersistenceContext
     private EntityManager em;
 
     private final DaoRegistry daoRegistry;
     private final FhirContext fhirContext;
+    private final MeterRegistry meterRegistry;
 
-    public News2AggregationService(DaoRegistry daoRegistry, FhirContext fhirContext) {
+    public News2AggregationService(DaoRegistry daoRegistry, FhirContext fhirContext, MeterRegistry meterRegistry) {
         this.daoRegistry = daoRegistry;
         this.fhirContext = fhirContext;
+        this.meterRegistry = meterRegistry;
     }
 
     private IFhirResourceDao<Patient> patientDao() { return daoRegistry.getResourceDao(Patient.class); }
@@ -39,6 +52,8 @@ public class News2AggregationService {
     @Transactional
     public void processBundleObservations(List<Observation> observations) {
         if (observations == null || observations.isEmpty()) return;
+
+        Timer.Sample batchTimer = Timer.start(meterRegistry);
 
         // 1) keep only newest observation per patient+code from this bundle
         Map<String, Map<String, Observation>> newest = new HashMap<>();
@@ -64,6 +79,7 @@ public class News2AggregationService {
         if (newest.isEmpty()) return;
 
         // 2) upsert aggregation rows only for items in newest map (cheap)
+        Timer.Sample dbTimer = Timer.start(meterRegistry);
         Set<String> affectedPatients = new HashSet<>();
         for (var e : newest.entrySet()) {
             String pid = e.getKey();
@@ -76,6 +92,11 @@ public class News2AggregationService {
                 affectedPatients.add(pid);
             }
         }
+        dbTimer.stop(
+                Timer.builder(METRIC_DB)
+                        .description("Time spent updating NEWS2 aggregates")
+                        .register(meterRegistry)
+        );
 
         // 3) compute totals for affected patients in single grouped query
         List<Object[]> rows = em.createQuery(
@@ -90,25 +111,19 @@ public class News2AggregationService {
             totals.put(pid, n == null ? 0 : n.intValue());
         }
 
+        meterRegistry.counter(METRIC_PATIENTS)
+                .increment(affectedPatients.size());
+
         // 4) update Patient extension only if changed
         for (String pid : affectedPatients) {
-            int total = totals.getOrDefault(pid, 0);
-            try {
-                Patient patient = patientDao().read(fhirContext.getVersion().newIdType("Patient", pid), null);
-                Extension ext = patient.getExtensionByUrl(NEWS2_EXTENSION_URL);
-                Integer old = ext != null && ext.getValue() instanceof IntegerType ? ((IntegerType)ext.getValue()).getValue() : null;
-                if (!Objects.equals(old, total)) {
-                    if (ext == null) {
-                        patient.addExtension(new Extension(NEWS2_EXTENSION_URL, new IntegerType(total)));
-                    } else {
-                        ext.setValue(new IntegerType(total));
-                    }
-                    patientDao().update(patient);
-                }
-            } catch (Exception ex) {
-                logger.warn("Failed updating patient {} NEWS2", pid, ex);
-            }
+            updatePatientNews2IfChanged(pid, totals.getOrDefault(pid, 0));
         }
+
+        batchTimer.stop(
+                Timer.builder(METRIC_PROCESSING)
+                        .description("End-to-end NEWS2 aggregation latency")
+                        .register(meterRegistry)
+        );
     }
 
     private Instant extractObservationInstant(Observation o) {
@@ -151,6 +166,51 @@ public class News2AggregationService {
             a.setValue(value);
             a.setObservedAt(obsAt);
             em.merge(a);
+        }
+    }
+
+    @Transactional
+    private void updatePatientNews2IfChanged(String patientId, int total) {
+        boolean patientModified = false;
+
+        try {
+            Patient patient = patientDao().read(fhirContext.getVersion().newIdType("Patient", patientId), null);
+            Extension ext = patient.getExtensionByUrl(NEWS2_EXTENSION_URL);
+            Integer old = ext != null && ext.getValue() instanceof IntegerType ? ((IntegerType)ext.getValue()).getValue() : null;
+            
+            if (!Objects.equals(old, total)) {
+                if (ext == null) {
+                    patient.addExtension(new Extension(NEWS2_EXTENSION_URL, new IntegerType(total)));
+                } else {
+                    ext.setValue(new IntegerType(total));
+                }
+                patientDao().update(patient);
+                patientModified = true;
+
+                meterRegistry.counter(METRIC_OUTCOME, "result", "changed").increment();
+
+                Patient finalPatient = patient;
+                TransactionSynchronizationManager.registerSynchronization(
+                        new TransactionSynchronization() {
+                            @Override
+                            public void afterCommit() {
+                                Timer.Sample upstreamTimer = Timer.start(meterRegistry);
+                                // TODO: implement upstream forwarding if needed
+                                // upstreamForwarder.upsertPatients(List.of(finalPatient));
+                                upstreamTimer.stop(
+                                        Timer.builder(METRIC_UPSTREAM)
+                                                .description("Time spent forwarding patients upstream")
+                                                .register(meterRegistry)
+                                );
+                            }
+                        }
+                );
+            } else {
+                meterRegistry.counter(METRIC_OUTCOME, "result", "unchanged").increment();
+            }
+        } catch (Exception ex) {
+            logger.warn("Failed updating patient {} NEWS2", patientId, ex);
+            meterRegistry.counter(METRIC_OUTCOME, "result", "error").increment();
         }
     }
 
