@@ -2,7 +2,7 @@
 server:
 #  servlet:
 #    context-path: /example/path
-  port: 8080
+  port: 8090
 #Adds the option to go to e.g. http://localhost:8080/actuator/health for seeing the running configuration
 #see https://docs.spring.io/spring-boot/docs/current/reference/html/actuator.html#actuator.endpoints
 management:
@@ -302,9 +302,9 @@ hapi:
     #    binary_storage_enabled: true
     inline_resource_storage_below_size: 4000
 #    bulk_export_enabled: true
-#    subscription:
-#      resthook_enabled: true
-#      websocket_enabled: false
+    subscription:
+      resthook_enabled: true
+      websocket_enabled: false
 #      email:
 #        from: some@test.com
 #        host: google.com

@@ -2,7 +2,7 @@
 server:
   #  servlet:
   #    context-path: /example/path
-  port: 8080
+  port: 8081
   tomcat:
     # allow | as a separator in the URL
     relaxed-query-chars: "|"
@@ -14,7 +14,7 @@ management:
     enabled-by-default: false
     web:
       exposure:
-        include: 'health' # or e.g. 'info,health,prometheus,metrics' or '*' for all
+        include: 'health,info,prometheus' # or e.g. 'info,health,prometheus,metrics' or '*' for all
   endpoint:
     info:
       enabled: true
@@ -36,11 +36,18 @@ management:
       export:
         enabled: true
 spring:
+  h2:
+    console:
+      enabled: true
+      path: /h2-console
   main:
     allow-circular-references: true
   devtools:
     restart:
       enabled: false
+  mvc:
+    media-type:
+      default: application/json
   flyway:
     enabled: false
     baselineOnMigrate: true
@@ -357,9 +364,9 @@ hapi:
     #    binary_storage_enabled: true
     inline_resource_storage_below_size: 4000
 #    bulk_export_enabled: true
-#    subscription:
-#      resthook_enabled: true
-#      websocket_enabled: false
+    subscription:
+      resthook_enabled: true
+      websocket_enabled: true
 #      polling_interval_ms: 5000
 #      immediately_queued: false
 #      email:
@@ -390,3 +397,6 @@ hapi:
 #  protocol: 'http'
 #  schema_management_strategy: CREATE
 #  username: SomeUsername
+upstream:
+  fhir:
+    base-url: http://localhost:8082/fhir
