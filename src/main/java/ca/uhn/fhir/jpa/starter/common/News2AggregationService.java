@@ -25,12 +25,12 @@ public class News2AggregationService {
     private static final Logger logger = LoggerFactory.getLogger(News2AggregationService.class);
 
     // ---- metrics (names only) ----
-    private static final String METRIC_BUNDLE_TIMER = "fhir.news2.bundle.processing";
-    private static final String METRIC_OBSERVATIONS = "fhir.news2.bundle.observations";
-    private static final String METRIC_PATIENTS = "fhir.news2.bundle.patients";
-    private static final String METRIC_UPSERT_TIMER = "fhir.news2.aggregate.upsert";
-    private static final String METRIC_PATIENT_UPDATE_TIMER = "fhir.news2.patient.update";
-    private static final String METRIC_PATIENT_UPDATE_ERROR = "fhir.news2.patient.update.error";
+    private static final String METRIC_BUNDLE_TIMER = "fhir_news2_bundle_processing";
+    private static final String METRIC_OBSERVATIONS = "fhir_news2_bundle_observations_count";
+    private static final String METRIC_PATIENTS = "fhir_news2_bundle_patients_count";
+    private static final String METRIC_UPSERT_TIMER = "fhir_news2_aggregate_upsert";
+    private static final String METRIC_PATIENT_UPDATE_TIMER = "fhir_news2_patient_update";
+    private static final String METRIC_PATIENT_UPDATE_ERROR = "fhir_news2_patient_update_errors";
 
     private static final String NEWS2_EXTENSION_URL = "http://news2-score";
     private static final Set<String> LOINC_CODES =
@@ -110,7 +110,11 @@ public class News2AggregationService {
                     affectedPatients.add(pid);
                 }
             }
-            upsertSample.stop(meterRegistry.timer(METRIC_UPSERT_TIMER));
+            upsertSample.stop(
+                    Timer.builder(METRIC_UPSERT_TIMER)
+                            .description("Time spent upserting NEWS2 aggregates")
+                            .register(meterRegistry)
+            );
 
             // 3) compute totals
             List<Object[]> rows = em.createQuery(
@@ -156,13 +160,19 @@ public class News2AggregationService {
                     logger.warn("Failed updating patient {} NEWS2", pid, ex);
                 } finally {
                     patientSample.stop(
-                            meterRegistry.timer(METRIC_PATIENT_UPDATE_TIMER));
+                            Timer.builder(METRIC_PATIENT_UPDATE_TIMER)
+                                    .description("Time spent updating patient NEWS2 extension")
+                                    .register(meterRegistry)
+                    );
                 }
             }
 
         } finally {
             bundleSample.stop(
-                    meterRegistry.timer(METRIC_BUNDLE_TIMER));
+                    Timer.builder(METRIC_BUNDLE_TIMER)
+                            .description("End-to-end NEWS2 bundle processing latency")
+                            .register(meterRegistry)
+            );
         }
     }
 
