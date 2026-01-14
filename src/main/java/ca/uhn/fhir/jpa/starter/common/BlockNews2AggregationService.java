@@ -130,52 +130,46 @@ public class BlockNews2AggregationService {
 
     // Ensure neighborhood exists; returns true if patient was updated
     private boolean ensureNeighborhoodIfMissing(Patient patient) {
-        try {
-            Extension locExt = patient.getExtensionByUrl(LOCATION_EXTENSION_URL);
-            if (locExt == null) {
-                locExt = new Extension(LOCATION_EXTENSION_URL);
-                patient.addExtension(locExt);
-            }
+        Extension locExt = patient.getExtensionByUrl(LOCATION_EXTENSION_URL);
+        if (locExt == null) {
+            locExt = new Extension(LOCATION_EXTENSION_URL);
+            patient.addExtension(locExt);
+        }
 
-            boolean hasNeighborhood = locExt.getExtension().stream()
-                .anyMatch(e -> NEIGH_URL.equals(e.getUrl()) && e.getValue() != null);
+        boolean hasNeighborhood = locExt.getExtension().stream()
+            .anyMatch(e -> NEIGH_URL.equals(e.getUrl()) && e.getValue() != null);
 
-            if (!hasNeighborhood) {
-                locExt.addExtension(new Extension()
-                    .setUrl(NEIGH_URL)
-                    .setValue(new StringType(NEIGH_VALUE)));
-                patientDao().update(patient);
-                try {
-                    // Forward updated patient upstream AFTER DB commit, asynchronously.
-                    Patient copy = (Patient) patient.copy();
-                    TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
-                        @Override
-                        public void afterCommit() {
-                            Runnable task = () -> {
-                                try {
-                                    if (upstreamForwarder != null) {
-                                        upstreamForwarder.upsertPatients(java.util.List.of(copy));
-                                    }
-                                } catch (Exception e) {
-                                    // best-effort: log and swallow
-                                }
-                            };
-                            if (aggExecutor != null) {
-                                aggExecutor.execute(task);
-                            } else {
-                                task.run();
-                            }
-                        }
-                    });
-                } catch (Exception e) {
-                    // swallow any registration errors
-                }
-                return true;
+        if (!hasNeighborhood) {
+            locExt.addExtension(new Extension()
+                .setUrl(NEIGH_URL)
+                .setValue(new StringType(NEIGH_VALUE)));
+            patientDao().update(patient);
+            
+            // Forward updated patient upstream AFTER DB commit, asynchronously.
+            Patient copy = (Patient) patient.copy();
+            if (TransactionSynchronizationManager.isSynchronizationActive()) {
+                TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                    @Override
+                    public void afterCommit() {
+                        forwardPatientAsync(copy);
+                    }
+                });
+            } else {
+                forwardPatientAsync(copy);
             }
-        } catch (Exception e) {
-            // Optional: log error
+            return true;
         }
         return false;
+    }
+
+    private void forwardPatientAsync(Patient patient) {
+        try {
+            if (upstreamForwarder != null) {
+                upstreamForwarder.upsertPatients(java.util.List.of(patient));
+            }
+        } catch (Exception e) {
+            // best-effort: swallow
+        }
     }
 
     // Use region from Patient location extension in aggregation key
