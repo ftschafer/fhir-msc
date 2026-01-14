@@ -3,6 +3,8 @@ package ca.uhn.fhir.jpa.starter.common;
 import ca.uhn.fhir.context.FhirContext;
 import ca.uhn.fhir.jpa.api.dao.DaoRegistry;
 import ca.uhn.fhir.jpa.api.dao.IFhirResourceDao;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.Timer;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.PersistenceContext;
 import jakarta.transaction.Transactional;
@@ -29,6 +31,15 @@ public class BlockNews2AggregationService {
     private static final String NEIGH_URL = "neighborhood";
     private static final String NEIGH_VALUE = "center";
     private static final String BLOCK_URL = "block"; // define region URL
+    
+    // Metrics
+    private static final String METRIC_BUNDLE_TIMER = "fhir_news2_bundle_processing";
+    private static final String METRIC_OBSERVATIONS = "fhir_news2_bundle_observations_count";
+    private static final String METRIC_PATIENTS = "fhir_news2_bundle_patients_count";
+    private static final String METRIC_UPSERT_TIMER = "fhir_news2_aggregate_upsert";
+    private static final String METRIC_PATIENT_UPDATE_TIMER = "fhir_news2_patient_update";
+    private static final String METRIC_PATIENT_UPDATE_ERROR = "fhir_news2_patient_update_errors";
+    private static final String METRIC_PATIENT_UPDATE_SUCCESS = "fhir_news2_patient_update_success";
 
     @PersistenceContext
     private EntityManager em;
@@ -37,22 +48,27 @@ public class BlockNews2AggregationService {
     private final FhirContext fhirContext;
     private final UpstreamForwarder upstreamForwarder;
     private final ThreadPoolTaskExecutor aggExecutor;
+    private final MeterRegistry meterRegistry;
 
-    public BlockNews2AggregationService(DaoRegistry daoRegistry, FhirContext fhirContext, UpstreamForwarder upstreamForwarder, ThreadPoolTaskExecutor aggExecutor) {
+    public BlockNews2AggregationService(DaoRegistry daoRegistry, FhirContext fhirContext, UpstreamForwarder upstreamForwarder, ThreadPoolTaskExecutor aggExecutor, MeterRegistry meterRegistry) {
         this.daoRegistry = daoRegistry;
         this.fhirContext = fhirContext;
         this.upstreamForwarder = upstreamForwarder;
         this.aggExecutor = aggExecutor;
+        this.meterRegistry = meterRegistry;
     }
 
     private IFhirResourceDao<Patient> patientDao() { return daoRegistry.getResourceDao(Patient.class); }
 
     @Transactional
     public void updateBlockForPatient(String patientId) {
+        Timer.Sample sample = Timer.start(meterRegistry);
         Patient patient;
         try {
             patient = patientDao().read(fhirContext.getVersion().newIdType("Patient", patientId), null);
         } catch (Exception e) {
+            meterRegistry.counter(METRIC_PATIENT_UPDATE_ERROR, "reason", "patient_not_found").increment();
+            sample.stop(meterRegistry.timer(METRIC_PATIENT_UPDATE_TIMER, "status", "error"));
             return;
         }
 
@@ -126,6 +142,9 @@ public class BlockNews2AggregationService {
             adjustBlock(region, block, neighborhood, delta, 0);
         }
         em.flush();
+        
+        meterRegistry.counter(METRIC_PATIENT_UPDATE_SUCCESS).increment();
+        sample.stop(meterRegistry.timer(METRIC_PATIENT_UPDATE_TIMER, "status", "success"));
     }
 
     // Ensure neighborhood exists; returns true if patient was updated
@@ -174,6 +193,8 @@ public class BlockNews2AggregationService {
 
     // Use region from Patient location extension in aggregation key
     private void adjustBlock(String region, String block, String neighborhood, int scoreDelta, int patientDelta) {
+        Timer.Sample upsertSample = Timer.start(meterRegistry);
+        
         String city = normalize(neighborhood) == null ? "UNKNOWN" : normalize(neighborhood);
         String reg = normalize(region) == null ? "UNKNOWN" : normalize(region);
 
@@ -183,9 +204,17 @@ public class BlockNews2AggregationService {
             agg = new BlockNews2Aggregate(reg, city, block);
             agg.applyDelta(scoreDelta, patientDelta);
             em.persist(agg);
+            upsertSample.stop(meterRegistry.timer(METRIC_UPSERT_TIMER, "operation", "insert", "region", reg));
         } else {
             agg.applyDelta(scoreDelta, patientDelta);
             em.merge(agg);
+            upsertSample.stop(meterRegistry.timer(METRIC_UPSERT_TIMER, "operation", "update", "region", reg));
+        }
+        
+        // Track patient count changes
+        if (patientDelta != 0) {
+            meterRegistry.counter(METRIC_PATIENTS, "region", reg, "operation", patientDelta > 0 ? "add" : "remove")
+                .increment(Math.abs(patientDelta));
         }
     }
 
