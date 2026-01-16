@@ -31,6 +31,19 @@ public class CityNews2AggregationService {
     private static final String METRIC_AGGREGATE = "fhir.patient.processing.aggregate";
     private static final String METRIC_UPSTREAM = "fhir.patient.processing.upstream";
     private static final String METRIC_OUTCOME = "fhir.patient.processing.outcome";
+    
+    // Bundle processing metrics
+    private static final String METRIC_BUNDLE_TIMER = "fhir_news2_bundle_processing";
+    private static final String METRIC_OBSERVATIONS = "fhir_news2_bundle_observations_count";
+    private static final String METRIC_PATIENTS = "fhir_news2_bundle_patients_count";
+    
+    // Aggregate upsert metrics
+    private static final String METRIC_UPSERT_TIMER = "fhir_news2_aggregate_upsert";
+    
+    // Patient update metrics
+    private static final String METRIC_PATIENT_UPDATE_TIMER = "fhir_news2_patient_update";
+    private static final String METRIC_PATIENT_UPDATE_ERROR = "fhir_news2_patient_update_errors";
+    private static final String METRIC_PATIENT_UPDATE_SUCCESS = "fhir_news2_patient_update_success";
 
     private static final String NEWS2_EXTENSION_URL = "http://news2-score";
     private static final String LOCATION_EXTENSION_URL = "http://patient-location";
@@ -125,14 +138,18 @@ public class CityNews2AggregationService {
     // ----------------------------------------------------
     private void processPatient(Patient patient) {
 
-        Date patientLastUpdated = Optional.ofNullable(patient.getMeta())
-                .map(Meta::getLastUpdated)
-                .orElse(null);
+        Timer.Sample patientUpdateSample = Timer.start(meterRegistry);
+        boolean updateSuccess = false;
+        
+        try {
+            Date patientLastUpdated = Optional.ofNullable(patient.getMeta())
+                    .map(Meta::getLastUpdated)
+                    .orElse(null);
 
-        String patientId = patient.getIdElement().getIdPart();
-        PatientBlock pb = em.find(PatientBlock.class, patientId);
+            String patientId = patient.getIdElement().getIdPart();
+            PatientBlock pb = em.find(PatientBlock.class, patientId);
 
-        boolean patientMutated = ensureCityIfMissing(patient);
+            boolean patientMutated = ensureCityIfMissing(patient);
         if (patientMutated) {
             try {
                 patient = patientDao().read(patient.getIdElement().withVersion(null), null);
@@ -197,6 +214,16 @@ public class CityNews2AggregationService {
         }
 
         em.flush();
+        
+            updateSuccess = true;
+            meterRegistry.counter(METRIC_PATIENT_UPDATE_SUCCESS).increment();
+            
+        } catch (Exception e) {
+            meterRegistry.counter(METRIC_PATIENT_UPDATE_ERROR).increment();
+            throw e;
+        } finally {
+            patientUpdateSample.stop(meterRegistry.timer(METRIC_PATIENT_UPDATE_TIMER));
+        }
     }
 
     // ----------------------------------------------------
@@ -255,16 +282,21 @@ public class CityNews2AggregationService {
     private void adjustBlock(String city, String neighborhood, String block,
                              int scoreDelta, int patientDelta) {
 
-        BlockKey key = new BlockKey(city, neighborhood, block);
-        BlockNews2Aggregate agg = em.find(BlockNews2Aggregate.class, key);
+        Timer.Sample upsertSample = Timer.start(meterRegistry);
+        try {
+            BlockKey key = new BlockKey(city, neighborhood, block);
+            BlockNews2Aggregate agg = em.find(BlockNews2Aggregate.class, key);
 
-        if (agg == null) {
-            agg = new BlockNews2Aggregate(city, neighborhood, block);
-            agg.applyDelta(scoreDelta, patientDelta);
-            em.persist(agg);
-        } else {
-            agg.applyDelta(scoreDelta, patientDelta);
-            em.merge(agg);
+            if (agg == null) {
+                agg = new BlockNews2Aggregate(city, neighborhood, block);
+                agg.applyDelta(scoreDelta, patientDelta);
+                em.persist(agg);
+            } else {
+                agg.applyDelta(scoreDelta, patientDelta);
+                em.merge(agg);
+            }
+        } finally {
+            upsertSample.stop(meterRegistry.timer(METRIC_UPSERT_TIMER));
         }
     }
 
