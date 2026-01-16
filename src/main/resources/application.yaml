@@ -210,7 +210,7 @@ hapi:
     #    allow_cascading_deletes: true
     #    allow_contains_searches: true
     #    allow_external_references: true
-    #    allow_multiple_delete: true
+    allow_multiple_delete: true
     #    allow_override_default_search_params: true
     #    auto_create_placeholder_reference_targets: false
     #    mass_ingestion_mode_enabled: false
@@ -220,8 +220,8 @@ hapi:
     #    default_encoding: JSON
     #    default_pretty_print: true
     #    default_page_size: 20
-    #    delete_enabled: true
-    #    delete_expunge_enabled: true
+    delete_enabled: true
+    delete_expunge_enabled: true
     #    match_url_cache_enabled: false
     #    enable_repository_validating_interceptor: true
     ### Reduce the size used by search indexes by not tagging every row with the resource type and parameter name (this setting makes manual inspection of the database more difficult, but does not impact HAPI FHIR functionality in any way)
@@ -238,12 +238,12 @@ hapi:
     bulk_export_enabled: false
     bulk_import_enabled: false
     #    language_search_parameter_enabled: true
-    #    enforce_referential_integrity_on_delete: false
+    enforce_referential_integrity_on_delete: false
     # This is an experimental feature, and does not fully support _total and other FHIR features.
     #    enforce_referential_integrity_on_delete: false
-    #    enforce_referential_integrity_on_write: false
+    enforce_referential_integrity_on_write: false
     #    etag_support_enabled: true
-    #    expunge_enabled: true
+    expunge_enabled: true
     #    client_id_strategy: ALPHANUMERIC
     #    server_id_strategy: SEQUENTIAL_NUMERIC
     #    fhirpath_interceptor_enabled: false
