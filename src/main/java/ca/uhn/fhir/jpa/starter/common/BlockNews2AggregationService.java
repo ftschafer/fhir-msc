@@ -40,6 +40,9 @@ public class BlockNews2AggregationService {
     private static final String METRIC_PATIENT_UPDATE_TIMER = "fhir_news2_patient_update";
     private static final String METRIC_PATIENT_UPDATE_ERROR = "fhir_news2_patient_update_errors";
     private static final String METRIC_PATIENT_UPDATE_SUCCESS = "fhir_news2_patient_update_success";
+    private static final String METRIC_UPSTREAM_TIMER = "fhir_news2_upstream_forward";
+    private static final String METRIC_UPSTREAM_SUCCESS = "fhir_news2_upstream_success";
+    private static final String METRIC_UPSTREAM_ERROR = "fhir_news2_upstream_errors";
 
     @PersistenceContext
     private EntityManager em;
@@ -182,11 +185,18 @@ public class BlockNews2AggregationService {
     }
 
     private void forwardPatientAsync(Patient patient) {
+        Timer.Sample sample = Timer.start(meterRegistry);
         try {
             if (upstreamForwarder != null) {
                 upstreamForwarder.upsertPatients(java.util.List.of(patient));
+                meterRegistry.counter(METRIC_UPSTREAM_SUCCESS).increment();
+                sample.stop(meterRegistry.timer(METRIC_UPSTREAM_TIMER, "status", "success"));
+            } else {
+                sample.stop(meterRegistry.timer(METRIC_UPSTREAM_TIMER, "status", "skipped"));
             }
         } catch (Exception e) {
+            meterRegistry.counter(METRIC_UPSTREAM_ERROR, "reason", e.getClass().getSimpleName()).increment();
+            sample.stop(meterRegistry.timer(METRIC_UPSTREAM_TIMER, "status", "error"));
             // best-effort: swallow
         }
     }

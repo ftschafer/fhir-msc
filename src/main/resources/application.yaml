@@ -399,4 +399,4 @@ hapi:
 #  username: SomeUsername
 upstream:
   fhir:
-    base-url: http://localhost:8082/fhir
+    base-url: http://52.15.192.196:8082/fhir
