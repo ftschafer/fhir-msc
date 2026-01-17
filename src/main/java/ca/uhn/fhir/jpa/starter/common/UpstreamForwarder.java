@@ -4,6 +4,7 @@ import ca.uhn.fhir.context.FhirContext;
 import ca.uhn.fhir.rest.client.api.IGenericClient;
 import ca.uhn.fhir.rest.client.interceptor.SimpleRequestHeaderInterceptor;
 import org.hl7.fhir.r4.model.Bundle;
+import org.hl7.fhir.r4.model.Condition;
 import org.hl7.fhir.r4.model.Observation;
 import org.hl7.fhir.r4.model.Patient;
 import org.springframework.beans.factory.annotation.Value;
@@ -43,6 +44,24 @@ public class UpstreamForwarder {
                 String id = p.getIdElement().getIdPart();
                 e.getRequest().setMethod(Bundle.HTTPVerb.PUT)
                     .setUrl(id != null ? "Patient/" + id : "Patient");
+            }
+            client.transaction().withBundle(tx).execute();
+        } catch (Exception ignored) { }
+    }
+
+    /**
+     * Forward Condition resources to upstream server
+     * Used for auto-detected clinical conditions from CDSS
+     */
+    public void upsertConditions(List<Condition> conditions) {
+        if (conditions == null || conditions.isEmpty()) return;
+        try {
+            Bundle tx = new Bundle().setType(Bundle.BundleType.TRANSACTION);
+            for (Condition c : conditions) {
+                Bundle.BundleEntryComponent e = tx.addEntry().setResource(c);
+                String id = c.getIdElement().getIdPart();
+                e.getRequest().setMethod(Bundle.HTTPVerb.PUT)
+                    .setUrl(id != null ? "Condition/" + id : "Condition");
             }
             client.transaction().withBundle(tx).execute();
         } catch (Exception ignored) { }

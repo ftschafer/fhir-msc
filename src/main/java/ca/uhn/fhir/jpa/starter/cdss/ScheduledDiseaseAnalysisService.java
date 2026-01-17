@@ -3,6 +3,7 @@ package ca.uhn.fhir.jpa.starter.cdss;
 import ca.uhn.fhir.jpa.api.dao.DaoRegistry;
 import ca.uhn.fhir.jpa.api.dao.IFhirResourceDao;
 import ca.uhn.fhir.jpa.searchparam.SearchParameterMap;
+import ca.uhn.fhir.jpa.starter.common.UpstreamForwarder;
 import ca.uhn.fhir.rest.api.server.IBundleProvider;
 import ca.uhn.fhir.rest.param.ReferenceParam;
 import ca.uhn.fhir.rest.param.TokenParam;
@@ -38,6 +39,9 @@ public class ScheduledDiseaseAnalysisService {
     @Autowired
     private ConditionFactory conditionFactory;
 
+    @Autowired(required = false)
+    private UpstreamForwarder upstreamForwarder;
+
     // CQL libraries to evaluate
     private static final String[] CQL_LIBRARIES = {
         "NEWS2Scoring",
@@ -68,6 +72,8 @@ public class ScheduledDiseaseAnalysisService {
 
             logger.info("Found {} patients to analyze", patients.size());
 
+            List<Condition> newConditions = new ArrayList<>();
+
             // Analyze each patient
             for (IBaseResource resource : patients) {
                 if (resource instanceof Patient) {
@@ -75,12 +81,24 @@ public class ScheduledDiseaseAnalysisService {
                     String patientId = patient.getIdElement().getIdPart();
                     
                     try {
-                        int created = analyzePatient(patientId);
-                        conditionsCreated += created;
+                        List<Condition> created = analyzePatient(patientId);
+                        newConditions.addAll(created);
+                        conditionsCreated += created.size();
                         patientsAnalyzed++;
                     } catch (Exception e) {
                         logger.error("Error analyzing patient " + patientId, e);
                     }
+                }
+            }
+
+            // Forward all new conditions to upstream server
+            if (!newConditions.isEmpty() && upstreamForwarder != null) {
+                try {
+                    logger.info("Forwarding {} conditions to upstream server", newConditions.size());
+                    upstreamForwarder.upsertConditions(newConditions);
+                    logger.info("✓ Successfully forwarded conditions upstream");
+                } catch (Exception e) {
+                    logger.error("Failed to forward conditions upstream", e);
                 }
             }
 
@@ -99,26 +117,33 @@ public class ScheduledDiseaseAnalysisService {
 
     /**
      * Analyze a single patient for disease conditions
-     * @return Number of conditions created
+     * Re-evaluates existing conditions and resolves them if no longer applicable
+     * Creates new conditions for currently detected diseases
+     * @return List of conditions created
      */
-    private int analyzePatient(String patientId) {
+    private List<Condition> analyzePatient(String patientId) {
         logger.debug("Analyzing patient: {}", patientId);
 
-        int conditionsCreated = 0;
+        List<Condition> createdConditions = new ArrayList<>();
+        int conditionsResolved = 0;
 
         // Get recent vital sign observations (last 24 hours)
         List<Observation> vitalSigns = getRecentVitalSigns(patientId);
         
         if (vitalSigns.isEmpty()) {
             logger.debug("No vital signs found for patient {}, skipping", patientId);
-            return 0;
+            return null;
         }
 
         // Get patient's current encounter and location
         Encounter currentEncounter = getCurrentEncounter(patientId);
         Location patientLocation = getPatientLocation(currentEncounter);
 
-        // Evaluate each CQL library
+        // Step 1: Re-evaluate existing active conditions and resolve if no longer applicable
+        List<Condition> existingConditions = getActiveConditions(patientId);
+        Map<String, Boolean> currentDiseaseStates = new HashMap<>();
+
+        // Evaluate each CQL library to determine current state
         for (String libraryName : CQL_LIBRARIES) {
             try {
                 // Evaluate CQL library for this patient
@@ -128,11 +153,47 @@ public class ScheduledDiseaseAnalysisService {
                     vitalSigns
                 );
 
-                // Check if condition should be created
-                if (shouldCreateCondition(libraryName, results)) {
-                    // Check for duplicate before creating
-                    if (!hasExistingActiveCondition(patientId, libraryName)) {
-                        // Create condition
+                // Track which diseases are currently detected
+                boolean diseaseDetected = shouldCreateCondition(libraryName, results);
+                currentDiseaseStates.put(libraryName, diseaseDetected);
+
+            } catch (Exception e) {
+                logger.error("Error evaluating " + libraryName + " for patient " + patientId, e);
+            }
+        }
+
+        // Step 2: Resolve existing conditions that no longer apply
+        for (Condition existingCondition : existingConditions) {
+            String libraryName = extractLibraryNameFromCondition(existingCondition);
+            if (libraryName != null && currentDiseaseStates.containsKey(libraryName)) {
+                Boolean stillDetected = currentDiseaseStates.get(libraryName);
+                if (stillDetected != null && !stillDetected) {
+                    // Disease no longer detected - resolve the condition
+                    resolveCondition(existingCondition);
+                    conditionsResolved++;
+                    logger.info("✓ Resolved Condition for patient {} ({}): no longer detected", 
+                               patientId, libraryName);
+                }
+            }
+        }
+
+        // Step 3: Create new conditions for currently detected diseases (if not already exists)
+        for (Map.Entry<String, Boolean> entry : currentDiseaseStates.entrySet()) {
+            String libraryName = entry.getKey();
+            Boolean detected = entry.getValue();
+
+            if (detected != null && detected) {
+                // Check if we already have an active condition for this
+                if (!hasActiveConditionForLibrary(existingConditions, libraryName)) {
+                    try {
+                        // Re-evaluate to get full results for condition creation
+                        Map<String, Object> results = cqlLibraryEvaluator.evaluateLibrary(
+                            libraryName, 
+                            patientId, 
+                            vitalSigns
+                        );
+
+                        // Create new condition
                         Condition condition = conditionFactory.createCondition(
                             patientId,
                             libraryName,
@@ -144,21 +205,24 @@ public class ScheduledDiseaseAnalysisService {
 
                         // Persist condition
                         IFhirResourceDao<Condition> conditionDao = daoRegistry.getResourceDao(Condition.class);
-                        conditionDao.create(condition);
+                        Condition createdCondition = (Condition) conditionDao.create(condition).getResource();
                         
-                        conditionsCreated++;
-                        logger.info("✓ Created Condition for patient {} using {}", patientId, libraryName);
-                    } else {
-                        logger.debug("Skipped duplicate condition for patient {} using {}", patientId, libraryName);
+                        createdConditions.add(createdCondition);
+                        logger.info("✓ Created NEW Condition for patient {} using {}", patientId, libraryName);
+                    } catch (Exception e) {
+                        logger.error("Error creating condition for " + libraryName, e);
                     }
+                } else {
+                    logger.debug("Condition still active for patient {} using {}", patientId, libraryName);
                 }
-
-            } catch (Exception e) {
-                logger.error("Error evaluating " + libraryName + " for patient " + patientId, e);
             }
         }
 
-        return conditionsCreated;
+        if (conditionsResolved > 0 || !createdConditions.isEmpty()) {
+            logger.info("Patient {}: {} created, {} resolved", patientId, createdConditions.size(), conditionsResolved);
+        }
+
+        return createdConditions;
     }
 
     /**
@@ -266,10 +330,9 @@ public class ScheduledDiseaseAnalysisService {
     }
 
     /**
-     * Check if patient already has an active condition for this disease
-     * Prevents duplicate conditions
+     * Get all active conditions for a patient
      */
-    private boolean hasExistingActiveCondition(String patientId, String libraryName) {
+    private List<Condition> getActiveConditions(String patientId) {
         IFhirResourceDao<Condition> conditionDao = daoRegistry.getResourceDao(Condition.class);
 
         SearchParameterMap searchMap = new SearchParameterMap();
@@ -278,33 +341,98 @@ public class ScheduledDiseaseAnalysisService {
         searchMap.setLoadSynchronous(true);
 
         IBundleProvider results = conditionDao.search(searchMap);
-        List<IBaseResource> conditions = results.getAllResources();
+        
+        return results.getAllResources().stream()
+            .filter(r -> r instanceof Condition)
+            .map(r -> (Condition) r)
+            .collect(Collectors.toList());
+    }
 
-        // Check if any condition has a note mentioning this library
-        for (IBaseResource resource : conditions) {
-            if (resource instanceof Condition) {
-                Condition condition = (Condition) resource;
-                
-                // Check notes for library name
-                if (condition.hasNote()) {
-                    for (Annotation note : condition.getNote()) {
-                        if (note.hasText() && note.getText().contains(libraryName)) {
-                            // Check if created recently (within last 24 hours)
-                            if (condition.hasRecordedDate()) {
-                                long hoursSinceCreated = 
-                                    (System.currentTimeMillis() - condition.getRecordedDate().getTime()) / (1000 * 60 * 60);
-                                if (hoursSinceCreated < 24) {
-                                    return true; // Duplicate found
-                                }
-                            } else {
-                                return true; // No date, assume recent
-                            }
-                        }
+    /**
+     * Extract library name from condition notes
+     */
+    private String extractLibraryNameFromCondition(Condition condition) {
+        if (!condition.hasNote()) {
+            return null;
+        }
+
+        for (Annotation note : condition.getNote()) {
+            if (note.hasText()) {
+                String text = note.getText();
+                // Check if note contains any of our library names
+                for (String libraryName : CQL_LIBRARIES) {
+                    if (text.contains(libraryName)) {
+                        return libraryName;
                     }
                 }
             }
         }
 
+        return null;
+    }
+
+    /**
+     * Check if an active condition exists for a specific library
+     */
+    private boolean hasActiveConditionForLibrary(List<Condition> conditions, String libraryName) {
+        for (Condition condition : conditions) {
+            String conditionLibrary = extractLibraryNameFromCondition(condition);
+            if (libraryName.equals(conditionLibrary)) {
+                return true;
+            }
+        }
         return false;
+    }
+
+    /**
+     * Resolve a condition by setting clinical status to 'resolved'
+     * Updates the condition to mark it as no longer active
+     */
+    private void resolveCondition(Condition condition) {
+        try {
+            // Update clinical status to resolved
+            CodeableConcept resolvedStatus = new CodeableConcept();
+            resolvedStatus.addCoding()
+                .setSystem("http://terminology.hl7.org/CodeSystem/condition-clinical")
+                .setCode("resolved")
+                .setDisplay("Resolved");
+            condition.setClinicalStatus(resolvedStatus);
+
+            // Add note about resolution
+            Annotation resolutionNote = new Annotation();
+            resolutionNote.setText("Automatically resolved by CDSS: condition no longer detected based on current vital signs.");
+            resolutionNote.setTime(new Date());
+            condition.addNote(resolutionNote);
+
+            // Set abatement date
+            condition.setAbatement(new DateTimeType(new Date()));
+
+            // Update the condition
+            IFhirResourceDao<Condition> conditionDao = daoRegistry.getResourceDao(Condition.class);
+            conditionDao.update(condition);
+
+            // Forward resolved condition to upstream server
+            if (upstreamForwarder != null) {
+                try {
+                    upstreamForwarder.upsertConditions(Arrays.asList(condition));
+                    logger.info("✓ Forwarded resolved Condition to upstream: {}", condition.getIdElement().getIdPart());
+                } catch (Exception e) {
+                    logger.warn("Failed to forward resolved condition upstream", e);
+                }
+            }
+
+            logger.debug("Resolved condition: {}", condition.getIdElement().getIdPart());
+        } catch (Exception e) {
+            logger.error("Error resolving condition " + condition.getIdElement().getIdPart(), e);
+        }
+    }
+
+    /**
+     * Check if patient already has an active condition for this disease
+     * Prevents duplicate conditions
+     */
+    private boolean hasExistingActiveCondition(String patientId, String libraryName) {
+        List<Condition> activeConditions = getActiveConditions(patientId);
+        return hasActiveConditionForLibrary(activeConditions, libraryName);
     }
 }

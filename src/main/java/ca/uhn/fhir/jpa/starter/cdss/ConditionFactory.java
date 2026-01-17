@@ -16,6 +16,9 @@ public class ConditionFactory {
 
     private static final Logger logger = LoggerFactory.getLogger(ConditionFactory.class);
 
+    // Extension URL for patient location (matches News2AggregationService pattern)
+    private static final String LOCATION_EXTENSION_URL = "http://patient-location";
+
     /**
      * Create a Condition resource from CQL evaluation results
      * 
@@ -84,10 +87,10 @@ public class ConditionFactory {
             condition.setEncounter(new Reference("Encounter/" + encounter.getIdElement().getIdPart()));
         }
 
-        // Add location as extension
+        // Add location as extension (matches News2AggregationService pattern)
         if (location != null) {
             Extension locationExtension = new Extension();
-            locationExtension.setUrl("http://hl7.org/fhir/StructureDefinition/condition-location");
+            locationExtension.setUrl(LOCATION_EXTENSION_URL);
             locationExtension.setValue(new Reference("Location/" + location.getIdElement().getIdPart()));
             condition.addExtension(locationExtension);
 
