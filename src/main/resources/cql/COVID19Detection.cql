@@ -38,48 +38,25 @@ define "Temperature":
 define "SpO2":
   (Last("Recent Observations" O where O.code ~ "Oxygen Saturation").value as FHIR.Quantity).value
 
-// COVID-19 Pattern Scoring
-define "Tachycardia Score":
-  if "Heart Rate" is not null and "Heart Rate" > 100 then 20 else 0
+// COVID-19 Vital Signs Pattern (ALL must match):
+// HR >100, BP >120/>80, RR >20, Temp >37.5°C, SpO₂ <90%
 
-define "Tachypnea Score":
-  if "Respiratory Rate" is not null and "Respiratory Rate" > 20 then 20 else 0
+define "COVID Tachycardia":
+  "Heart Rate" is not null and "Heart Rate" > 100
 
-define "Fever Score":
-  if "Temperature" is not null and "Temperature" > 37.5 then 20 else 0
+define "COVID Hypertension":
+  ("Systolic BP" is not null and "Systolic BP" > 120) or
+  ("Diastolic BP" is not null and "Diastolic BP" > 80)
 
-define "Hypoxia Score":
-  if "SpO2" is not null and "SpO2" < 90 then 30 else 0
+define "COVID Tachypnea":
+  "Respiratory Rate" is not null and "Respiratory Rate" > 20
 
-define "Hypertension Score":
-  if ("Systolic BP" is not null and "Systolic BP" > 120) or 
-     ("Diastolic BP" is not null and "Diastolic BP" > 80) then 10 else 0
+define "COVID Fever":
+  "Temperature" is not null and "Temperature" > 37.5
 
-define "COVID-19 Match Score":
-  "Tachycardia Score" + 
-  "Tachypnea Score" + 
-  "Fever Score" + 
-  "Hypoxia Score" + 
-  "Hypertension Score"
+define "COVID Hypoxia":
+  "SpO2" is not null and "SpO2" < 90
 
-define "High Risk COVID-19":
-  "COVID-19 Match Score" >= 80 and "SpO2" is not null and "SpO2" < 90
-
-define "Possible COVID-19":
-  "COVID-19 Match Score" >= 60
-
-define "COVID-19 Risk Level":
-  if "High Risk COVID-19" then 'high'
-  else if "Possible COVID-19" then 'moderate'
-  else 'low'
-
-define "COVID-19 Detected":
-  "COVID-19 Match Score" >= 60
-
-define "COVID-19 Recommendation":
-  if "High Risk COVID-19" then
-    'URGENT: High suspicion for COVID-19 with respiratory compromise. Consider PCR test, isolation, and oxygen support.'
-  else if "Possible COVID-19" then
-    'Consider COVID-19 testing and isolation precautions.'
-  else
-    null
+define "COVID19 Detected":
+  "COVID Tachycardia" and "COVID Hypertension" and "COVID Tachypnea" and 
+  "COVID Fever" and "COVID Hypoxia"

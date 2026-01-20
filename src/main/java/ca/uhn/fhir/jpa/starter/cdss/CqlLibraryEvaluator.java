@@ -137,9 +137,7 @@ public class CqlLibraryEvaluator {
      * Evaluate CQL logic (clinical reasoning rules)
      */
     private Map<String, Object> evaluateCqlLogic(String libraryName, Map<String, Double> vitals, String patientId) {
-        if ("NEWS2Scoring".equals(libraryName)) {
-            return evaluateNEWS2(vitals);
-        } else if ("SepsisDetection".equals(libraryName)) {
+        if ("SepsisDetection".equals(libraryName)) {
             return evaluateSepsis(vitals);
         } else if ("COVID19Detection".equals(libraryName)) {
             return evaluateCOVID19(vitals);
@@ -151,77 +149,8 @@ public class CqlLibraryEvaluator {
     }
 
     /**
-     * NEWS2 (National Early Warning Score 2) evaluation
-     */
-    private Map<String, Object> evaluateNEWS2(Map<String, Double> vitals) {
-        Map<String, Object> results = new HashMap<>();
-        int score = 0;
-
-        // Respiratory Rate
-        Double rr = vitals.get("respiratoryRate");
-        if (rr != null) {
-            if (rr <= 8) score += 3;
-            else if (rr <= 11) score += 1;
-            else if (rr <= 20) score += 0;
-            else if (rr <= 24) score += 2;
-            else score += 3;
-        }
-
-        // SpO2
-        Double spo2 = vitals.get("spO2");
-        if (spo2 != null) {
-            if (spo2 <= 91) score += 3;
-            else if (spo2 <= 93) score += 2;
-            else if (spo2 <= 95) score += 1;
-        }
-
-        // Systolic BP
-        Double sbp = vitals.get("systolicBP");
-        if (sbp != null) {
-            if (sbp <= 90) score += 3;
-            else if (sbp <= 100) score += 2;
-            else if (sbp <= 110) score += 1;
-            else if (sbp >= 220) score += 3;
-        }
-
-        // Heart Rate
-        Double hr = vitals.get("heartRate");
-        if (hr != null) {
-            if (hr <= 40) score += 3;
-            else if (hr <= 50) score += 1;
-            else if (hr <= 90) score += 0;
-            else if (hr <= 110) score += 1;
-            else if (hr <= 130) score += 2;
-            else score += 3;
-        }
-
-        // Temperature
-        Double temp = vitals.get("temperature");
-        if (temp != null) {
-            if (temp <= 35.0) score += 3;
-            else if (temp <= 36.0) score += 1;
-            else if (temp <= 38.0) score += 0;
-            else if (temp <= 39.0) score += 1;
-            else score += 2;
-        }
-
-        results.put("NEWS2 Total Score", score);
-
-        String riskLevel = (score == 0) ? "low" : (score <= 4) ? "low-medium" : (score <= 6) ? "medium" : "high";
-        results.put("NEWS2 Risk Level", riskLevel);
-
-        String response = (score == 0) ? "Continue routine monitoring" :
-                         (score <= 4) ? "Increase monitoring frequency" :
-                         (score <= 6) ? "Urgent response required" :
-                         "EMERGENCY: Immediate medical review";
-        results.put("NEWS2 Clinical Response", response);
-        results.put("Requires Escalation", score >= 5);
-
-        return results;
-    }
-
-    /**
-     * Sepsis detection using qSOFA and SIRS criteria
+     * Sepsis detection using exact symptom matching
+     * ALL criteria must match: HR >90, SBP ≤90, RR ≥20, Temp >38.3 or <36
      */
     private Map<String, Object> evaluateSepsis(Map<String, Double> vitals) {
         Map<String, Object> results = new HashMap<>();
@@ -230,65 +159,62 @@ public class CqlLibraryEvaluator {
         Double sbp = vitals.get("systolicBP");
         Double rr = vitals.get("respiratoryRate");
         Double temp = vitals.get("temperature");
-        Double spo2 = vitals.get("spO2");
 
-        // qSOFA criteria (quick Sequential Organ Failure Assessment)
-        int qsofaScore = 0;
-        if (sbp != null && sbp <= 100) qsofaScore++;
-        if (rr != null && rr >= 22) qsofaScore++;
+        // Exact symptom matching
+        boolean tachycardia = hr != null && hr > 90;
+        boolean hypotension = sbp != null && sbp <= 90;
+        boolean tachypnea = rr != null && rr >= 20;
+        boolean temperatureAbnormal = temp != null && (temp > 38.3 || temp < 36.0);
 
-        // SIRS criteria (Systemic Inflammatory Response Syndrome)
-        int sirsCount = 0;
-        if (hr != null && hr > 90) sirsCount++;
-        if (rr != null && rr > 20) sirsCount++;
-        if (temp != null && (temp > 38.0 || temp < 36.0)) sirsCount++;
+        boolean sepsisDetected = tachycardia && hypotension && tachypnea && temperatureAbnormal;
 
-        boolean hasHypoxia = spo2 != null && spo2 < 95;
-        boolean possibleSepsis = qsofaScore >= 2 || sirsCount >= 2;
-        boolean highRiskSepsis = qsofaScore >= 2 && hasHypoxia && sirsCount >= 3;
-
-        int matchScore = highRiskSepsis ? 90 : (possibleSepsis ? 70 : 40);
-
-        results.put("qSOFA Score", qsofaScore);
-        results.put("SIRS Criteria Count", sirsCount);
-        results.put("Possible Sepsis", possibleSepsis);
-        results.put("High Risk Sepsis", highRiskSepsis);
-        results.put("Sepsis Match Score", matchScore);
-        results.put("Sepsis Risk Level", highRiskSepsis ? "high" : (possibleSepsis ? "moderate" : "low"));
+        results.put("Tachycardia (HR >90)", tachycardia);
+        results.put("Hypotension (SBP ≤90)", hypotension);
+        results.put("Tachypnea (RR ≥20)", tachypnea);
+        results.put("Temperature Abnormal (>38.3 or <36)", temperatureAbnormal);
+        results.put("Sepsis Detected", sepsisDetected);
+        results.put("Sepsis Risk Level", sepsisDetected ? "high" : "low");
 
         return results;
     }
 
     /**
-     * COVID-19 pattern detection
+     * COVID-19 pattern detection using exact symptom matching
+     * ALL criteria must match: HR >100, BP >120/>80, RR >20, Temp >37.5, SpO₂ <90
      */
     private Map<String, Object> evaluateCOVID19(Map<String, Double> vitals) {
         Map<String, Object> results = new HashMap<>();
 
         Double hr = vitals.get("heartRate");
+        Double sbp = vitals.get("systolicBP");
+        Double dbp = vitals.get("diastolicBP");
         Double rr = vitals.get("respiratoryRate");
         Double temp = vitals.get("temperature");
         Double spo2 = vitals.get("spO2");
 
-        int vitalScore = 0;
-        if (hr != null && hr > 100) vitalScore += 20;
-        if (rr != null && rr > 20) vitalScore += 20;
-        if (temp != null && temp > 37.5) vitalScore += 20;
-        if (spo2 != null && spo2 < 90) vitalScore += 30;
+        // Exact symptom matching
+        boolean tachycardia = hr != null && hr > 100;
+        boolean hypertension = (sbp != null && sbp > 120) || (dbp != null && dbp > 80);
+        boolean tachypnea = rr != null && rr > 20;
+        boolean fever = temp != null && temp > 37.5;
+        boolean hypoxia = spo2 != null && spo2 < 90;
 
-        boolean highRisk = vitalScore >= 80 && spo2 != null && spo2 < 90;
-        boolean possible = vitalScore >= 60;
+        boolean covidDetected = tachycardia && hypertension && tachypnea && fever && hypoxia;
 
-        results.put("COVID-19 Match Score", vitalScore);
-        results.put("Possible COVID-19", possible);
-        results.put("High Risk COVID-19", highRisk);
-        results.put("COVID-19 Risk Level", highRisk ? "high" : (possible ? "moderate" : "low"));
+        results.put("Tachycardia (HR >100)", tachycardia);
+        results.put("Hypertension (BP >120/>80)", hypertension);
+        results.put("Tachypnea (RR >20)", tachypnea);
+        results.put("Fever (Temp >37.5)", fever);
+        results.put("Hypoxia (SpO2 <90)", hypoxia);
+        results.put("COVID19 Detected", covidDetected);
+        results.put("COVID-19 Risk Level", covidDetected ? "high" : "low");
 
         return results;
     }
 
     /**
-     * Asthma exacerbation detection
+     * Asthma exacerbation detection using exact symptom matching
+     * ALL criteria must match: HR >120, RR >30, SpO₂ <90
      */
     private Map<String, Object> evaluateAsthma(Map<String, Double> vitals) {
         Map<String, Object> results = new HashMap<>();
@@ -297,35 +223,18 @@ public class CqlLibraryEvaluator {
         Double rr = vitals.get("respiratoryRate");
         Double spo2 = vitals.get("spO2");
 
-        String severity = null;
-        int matchScore = 0;
+        // Exact symptom matching
+        boolean tachycardia = hr != null && hr > 120;
+        boolean tachypnea = rr != null && rr > 30;
+        boolean hypoxia = spo2 != null && spo2 < 90;
 
-        // Severe
-        if (hr != null && hr > 120 && rr != null && rr > 30 && spo2 != null && spo2 < 90) {
-            severity = "severe";
-            matchScore = 95;
-        }
-        // Moderate
-        else if (hr != null && hr >= 100 && hr <= 120 && 
-                 rr != null && rr >= 20 && rr <= 30 &&
-                 spo2 != null && spo2 >= 90 && spo2 <= 95) {
-            severity = "moderate";
-            matchScore = 85;
-        }
-        // Mild
-        else if (hr != null && hr < 100 &&
-                 rr != null && rr >= 20 && rr <= 30 &&
-                 spo2 != null && spo2 > 95) {
-            severity = "mild";
-            matchScore = 75;
-        }
+        boolean asthmaDetected = tachycardia && tachypnea && hypoxia;
 
-        if (severity != null) {
-            results.put("Asthma Severity", severity);
-            results.put("Asthma Match Score", matchScore);
-            results.put("Asthma Risk Level", severity.equals("severe") ? "high" : 
-                                            (severity.equals("moderate") ? "moderate" : "low"));
-        }
+        results.put("Tachycardia (HR >120)", tachycardia);
+        results.put("Tachypnea (RR >30)", tachypnea);
+        results.put("Hypoxia (SpO2 <90)", hypoxia);
+        results.put("Asthma Detected", asthmaDetected);
+        results.put("Asthma Risk Level", asthmaDetected ? "high" : "low");
 
         return results;
     }

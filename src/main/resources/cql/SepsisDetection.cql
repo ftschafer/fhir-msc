@@ -5,7 +5,6 @@ using FHIR version '4.0.1'
 include FHIRHelpers version '4.0.1'
 
 codesystem "LOINC": 'http://loinc.org'
-codesystem "SNOMED": 'http://snomed.info/sct'
 
 // Vital sign codes
 code "Heart Rate": '8867-4' from "LOINC"
@@ -53,65 +52,20 @@ define "Temperature":
 define "SpO2":
   ("SpO2 Observation".value as FHIR.Quantity).value
 
-// qSOFA Criteria (Quick Sequential Organ Failure Assessment)
-define "qSOFA Altered Mentation":
-  false // Would need GCS observation
+// Sepsis Criteria (ALL must match):
+// HR >90, SBP ≤90, RR ≥20, Temp >38.3°C or <36°C
 
-define "qSOFA Low Blood Pressure":
-  "Systolic BP" is not null and "Systolic BP" <= 100
-
-define "qSOFA High Respiratory Rate":
-  "Respiratory Rate" is not null and "Respiratory Rate" >= 22
-
-define "qSOFA Score":
-  (if "qSOFA Low Blood Pressure" then 1 else 0) +
-  (if "qSOFA High Respiratory Rate" then 1 else 0)
-
-// SIRS Criteria (Systemic Inflammatory Response Syndrome)
-define "SIRS Tachycardia":
+define "Sepsis Tachycardia":
   "Heart Rate" is not null and "Heart Rate" > 90
 
-define "SIRS Tachypnea":
-  "Respiratory Rate" is not null and "Respiratory Rate" > 20
+define "Sepsis Hypotension":
+  "Systolic BP" is not null and "Systolic BP" <= 90
 
-define "SIRS Temperature Abnormal":
-  "Temperature" is not null and 
-  ("Temperature" > 38.3 or "Temperature" < 36.0)
+define "Sepsis Tachypnea":
+  "Respiratory Rate" is not null and "Respiratory Rate" >= 20
 
-define "SIRS Count":
-  (if "SIRS Tachycardia" then 1 else 0) +
-  (if "SIRS Tachypnea" then 1 else 0) +
-  (if "SIRS Temperature Abnormal" then 1 else 0)
-
-// Hypoxia
-define "Has Hypoxia":
-  "SpO2" is not null and "SpO2" < 95
-
-// Sepsis Risk Assessment
-define "Possible Sepsis":
-  "qSOFA Score" >= 2 or "SIRS Count" >= 2
-
-define "High Risk Sepsis":
-  "qSOFA Score" >= 2 and "Has Hypoxia" and "SIRS Count" >= 3
-
-define "Sepsis Match Score":
-  if "High Risk Sepsis" then 90
-  else if "Possible Sepsis" then 70
-  else if "qSOFA Score" >= 1 or "SIRS Count" >= 1 then 40
-  else 0
-
-define "Sepsis Risk Level":
-  if "High Risk Sepsis" then 'high'
-  else if "Possible Sepsis" then 'moderate'
-  else 'low'
+define "Sepsis Temperature Abnormal":
+  "Temperature" is not null and ("Temperature" > 38.3 or "Temperature" < 36.0)
 
 define "Sepsis Detected":
-  "Sepsis Match Score" >= 60
-
-define "Sepsis Recommendation":
-  if "High Risk Sepsis" then 
-    'URGENT: High risk for sepsis. Consider immediate evaluation, blood cultures, and empiric antibiotics.'
-  else if "Possible Sepsis" then
-    'WARNING: Possible sepsis. Monitor closely and consider workup for infection.'
-  else
-    null
+  "Sepsis Tachycardia" and "Sepsis Hypotension" and "Sepsis Tachypnea" and "Sepsis Temperature Abnormal"

@@ -44,14 +44,13 @@ public class ScheduledDiseaseAnalysisService {
 
     // CQL libraries to evaluate
     private static final String[] CQL_LIBRARIES = {
-        "NEWS2Scoring",
         "SepsisDetection",
         "COVID19Detection",
         "AsthmaDetection"
     };
 
     // Run every 5 minutes (300000 ms)
-    @Scheduled(fixedDelay = 300000, initialDelay = 60000)
+    @Scheduled(fixedDelay = 300000, initialDelay = 20000)
     public void analyzeAllPatients() {
         logger.info("========================================");
         logger.info("SCHEDULED DISEASE ANALYSIS - Starting");
@@ -302,28 +301,22 @@ public class ScheduledDiseaseAnalysisService {
             return false;
         }
 
-        // NEWS2: Create if score >= 3
-        if ("NEWS2Scoring".equals(libraryName)) {
-            Object score = results.get("NEWS2 Total Score");
-            return score instanceof Integer && (Integer) score >= 3;
-        }
-
-        // Sepsis: Create if match score >= 60
+        // Sepsis: Create if "Sepsis Detected" is true (ALL exact symptoms matched)
         if ("SepsisDetection".equals(libraryName)) {
-            Object score = results.get("Sepsis Match Score");
-            return score instanceof Integer && (Integer) score >= 60;
+            Object detected = results.get("Sepsis Detected");
+            return detected instanceof Boolean && (Boolean) detected;
         }
 
-        // COVID-19: Create if match score >= 60
+        // COVID-19: Create if "COVID19 Detected" is true (ALL exact symptoms matched)
         if ("COVID19Detection".equals(libraryName)) {
-            Object score = results.get("COVID-19 Match Score");
-            return score instanceof Integer && (Integer) score >= 60;
+            Object detected = results.get("COVID19 Detected");
+            return detected instanceof Boolean && (Boolean) detected;
         }
 
-        // Asthma: Create if match score >= 75
+        // Asthma: Create if "Asthma Detected" is true (ALL exact symptoms matched)
         if ("AsthmaDetection".equals(libraryName)) {
-            Object score = results.get("Asthma Match Score");
-            return score instanceof Integer && (Integer) score >= 75;
+            Object detected = results.get("Asthma Detected");
+            return detected instanceof Boolean && (Boolean) detected;
         }
 
         return false;

@@ -26,49 +26,17 @@ define "Respiratory Rate":
 define "SpO2":
   (Last("Recent Observations" O where O.code ~ "Oxygen Saturation").value as FHIR.Quantity).value
 
-// Asthma Severity Classification
-define "Severe Asthma":
-  "Heart Rate" is not null and "Heart Rate" > 120 and
-  "Respiratory Rate" is not null and "Respiratory Rate" > 30 and
+// Asthma Vital Signs Pattern (ALL must match):
+// HR >120, RR >30, SpO₂ <90%
+
+define "Asthma Tachycardia":
+  "Heart Rate" is not null and "Heart Rate" > 120
+
+define "Asthma Tachypnea":
+  "Respiratory Rate" is not null and "Respiratory Rate" > 30
+
+define "Asthma Hypoxia":
   "SpO2" is not null and "SpO2" < 90
 
-define "Moderate Asthma":
-  "Heart Rate" is not null and "Heart Rate" >= 100 and "Heart Rate" <= 120 and
-  "Respiratory Rate" is not null and "Respiratory Rate" >= 20 and "Respiratory Rate" <= 30 and
-  "SpO2" is not null and "SpO2" >= 90 and "SpO2" <= 95
-
-define "Mild Asthma":
-  "Heart Rate" is not null and "Heart Rate" < 100 and
-  "Respiratory Rate" is not null and "Respiratory Rate" >= 20 and "Respiratory Rate" <= 30 and
-  "SpO2" is not null and "SpO2" > 95
-
-define "Asthma Severity":
-  if "Severe Asthma" then 'severe'
-  else if "Moderate Asthma" then 'moderate'
-  else if "Mild Asthma" then 'mild'
-  else null
-
-define "Asthma Match Score":
-  if "Severe Asthma" then 95
-  else if "Moderate Asthma" then 85
-  else if "Mild Asthma" then 75
-  else 0
-
-define "Asthma Risk Level":
-  if "Severe Asthma" then 'high'
-  else if "Moderate Asthma" then 'moderate'
-  else if "Mild Asthma" then 'low'
-  else 'none'
-
 define "Asthma Detected":
-  "Asthma Match Score" >= 75
-
-define "Asthma Recommendation":
-  if "Severe Asthma" then
-    'URGENT: Severe asthma exacerbation. Consider immediate bronchodilators, steroids, and possible intubation.'
-  else if "Moderate Asthma" then
-    'Moderate asthma exacerbation. Increase bronchodilator frequency and consider steroids.'
-  else if "Mild Asthma" then
-    'Mild asthma symptoms. Continue regular medications and monitor.'
-  else
-    null
+  "Asthma Tachycardia" and "Asthma Tachypnea" and "Asthma Hypoxia"
