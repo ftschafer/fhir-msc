@@ -5,8 +5,10 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.Date;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 import org.hl7.fhir.instance.model.api.IBaseResource;
@@ -19,6 +21,7 @@ import org.hl7.fhir.r4.model.IdType;
 import org.hl7.fhir.r4.model.Location;
 import org.hl7.fhir.r4.model.Observation;
 import org.hl7.fhir.r4.model.Patient;
+import org.hl7.fhir.r4.model.Reference;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -87,6 +90,7 @@ public class ScheduledDiseaseAnalysisService {
             logger.info("Found {} patients to analyze", patients.size());
 
             List<Condition> newConditions = new ArrayList<>();
+            Set<String> observationIds = new HashSet<>();
 
             // Analyze each patient
             for (IBaseResource resource : patients) {
@@ -97,6 +101,21 @@ public class ScheduledDiseaseAnalysisService {
                     try {
                         List<Condition> created = analyzePatient(patientId);
                         newConditions.addAll(created);
+                        
+                        // Collect all Observation IDs referenced in the conditions
+                        for (Condition condition : created) {
+                            if (condition.hasEvidence()) {
+                                for (Condition.ConditionEvidenceComponent evidence : condition.getEvidence()) {
+                                    for (Reference ref : evidence.getDetail()) {
+                                        if (ref.getReference() != null && ref.getReference().startsWith("Observation/")) {
+                                            String obsId = ref.getReference().substring("Observation/".length());
+                                            observationIds.add(obsId);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        
                         conditionsCreated += created.size();
                         patientsAnalyzed++;
                     } catch (Exception e) {
@@ -105,11 +124,29 @@ public class ScheduledDiseaseAnalysisService {
                 }
             }
 
-            // Forward all new conditions to upstream server
+            // Forward all new conditions to upstream server (with their referenced Observations)
             if (!newConditions.isEmpty() && upstreamForwarder != null) {
                 try {
                     logger.info("Forwarding {} conditions to upstream server", newConditions.size());
-                    upstreamForwarder.upsertConditions(newConditions);
+                    
+                    // Fetch all referenced Observations
+                    List<Observation> referencedObservations = new ArrayList<>();
+                    if (!observationIds.isEmpty()) {
+                        IFhirResourceDao<Observation> observationDao = daoRegistry.getResourceDao(Observation.class);
+                        for (String obsId : observationIds) {
+                            try {
+                                Observation obs = observationDao.read(new org.hl7.fhir.r4.model.IdType(obsId));
+                                if (obs != null) {
+                                    referencedObservations.add(obs);
+                                }
+                            } catch (Exception e) {
+                                logger.warn("Could not fetch Observation/{} for forwarding: {}", obsId, e.getMessage());
+                            }
+                        }
+                        logger.info("Collected {} referenced Observations for forwarding", referencedObservations.size());
+                    }
+                    
+                    upstreamForwarder.upsertConditionsWithObservations(newConditions, referencedObservations);
                     logger.info("✓ Successfully forwarded conditions upstream");
                 } catch (Exception e) {
                     logger.error("Failed to forward conditions upstream", e);

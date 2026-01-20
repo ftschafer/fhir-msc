@@ -1,8 +1,7 @@
 package ca.uhn.fhir.jpa.starter.common;
 
-import ca.uhn.fhir.context.FhirContext;
-import ca.uhn.fhir.rest.client.api.IGenericClient;
-import ca.uhn.fhir.rest.client.interceptor.SimpleRequestHeaderInterceptor;
+import java.util.List;
+
 import org.hl7.fhir.r4.model.Bundle;
 import org.hl7.fhir.r4.model.Condition;
 import org.hl7.fhir.r4.model.Observation;
@@ -10,7 +9,9 @@ import org.hl7.fhir.r4.model.Patient;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
-import java.util.List;
+import ca.uhn.fhir.context.FhirContext;
+import ca.uhn.fhir.rest.client.api.IGenericClient;
+import ca.uhn.fhir.rest.client.interceptor.SimpleRequestHeaderInterceptor;
 
 @Component
 public class UpstreamForwarder {
@@ -53,10 +54,34 @@ public class UpstreamForwarder {
      * Forward Condition resources to upstream server
      * Used for auto-detected clinical conditions from CDSS
      */
-        public void upsertConditions(List<Condition> conditions) {
+    public void upsertConditions(List<Condition> conditions) {
+        upsertConditionsWithObservations(conditions, null);
+    }
+
+    /**
+     * Forward Condition resources along with their referenced Observations to upstream server
+     * Ensures all referenced Observations exist before creating Conditions
+     */
+    public void upsertConditionsWithObservations(List<Condition> conditions, List<Observation> observations) {
         if (conditions == null || conditions.isEmpty()) return;
         try {
             Bundle tx = new Bundle().setType(Bundle.BundleType.TRANSACTION);
+            
+            // First, add all Observations (if provided)
+            if (observations != null && !observations.isEmpty()) {
+                for (Observation obs : observations) {
+                    Observation obsCopy = obs.copy();
+                    obsCopy.setId((String) null);
+                    
+                    Bundle.BundleEntryComponent e = tx.addEntry().setResource(obsCopy);
+                    String obsId = obs.getIdElement().getIdPart();
+                    e.getRequest()
+                        .setMethod(Bundle.HTTPVerb.PUT)
+                        .setUrl(obsId != null ? "Observation/" + obsId : "Observation");
+                }
+            }
+            
+            // Then, add all Conditions
             for (Condition c : conditions) {
                 // Create a copy without the ID to avoid conflicts
                 Condition conditionCopy = c.copy();
