@@ -146,14 +146,13 @@ public class UpstreamForwarder {
                 
                 Bundle.BundleEntryComponent e = conditionTx.addEntry().setResource(conditionCopy);
                 
-                // Use conditional create based on patient reference
+                // Use conditional update (PUT) to update existing or create new
                 String patientRef = c.getSubject().getReference();
                 String code = c.getCode().getCodingFirstRep().getCode();
                 
                 e.getRequest()
-                    .setMethod(Bundle.HTTPVerb.POST)
-                    .setUrl("Condition")
-                    .setIfNoneExist("patient=" + patientRef + "&code=" + code + "&clinical-status=active");
+                    .setMethod(Bundle.HTTPVerb.PUT)
+                    .setUrl("Condition?patient=" + patientRef + "&code=" + code + "&clinical-status=active");
             }
             
             client.transaction().withBundle(conditionTx).execute();

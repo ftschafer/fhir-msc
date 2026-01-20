@@ -1,11 +1,21 @@
 package ca.uhn.fhir.jpa.starter.cdss;
 
-import org.hl7.fhir.r4.model.*;
+import java.util.Arrays;
+import java.util.Date;
+import java.util.List;
+import java.util.Map;
+
+import org.hl7.fhir.r4.model.Annotation;
+import org.hl7.fhir.r4.model.CodeableConcept;
+import org.hl7.fhir.r4.model.Condition;
+import org.hl7.fhir.r4.model.Encounter;
+import org.hl7.fhir.r4.model.Extension;
+import org.hl7.fhir.r4.model.Location;
+import org.hl7.fhir.r4.model.Observation;
+import org.hl7.fhir.r4.model.Reference;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
-
-import java.util.*;
 
 /**
  * Factory class to create FHIR Condition resources from disease detection results
@@ -76,10 +86,33 @@ public class ConditionFactory {
         // Link to observations as evidence
         if (vitalSignObservations != null && !vitalSignObservations.isEmpty()) {
             Condition.ConditionEvidenceComponent evidence = new Condition.ConditionEvidenceComponent();
+            
+            // Filter to include only diagnostic-relevant observations (exclude height, weight)
+            List<String> relevantCodes = Arrays.asList(
+                "8867-4",   // Heart Rate
+                "9279-1",   // Respiratory Rate
+                "8480-6",   // Systolic BP
+                "8462-4",   // Diastolic BP
+                "8310-5",   // Body Temperature
+                "59408-5",  // Oxygen Saturation
+                "85354-9"   // Blood Pressure
+            );
+            
             for (Observation obs : vitalSignObservations) {
-                evidence.addDetail(new Reference("Observation/" + obs.getIdElement().getIdPart()));
+                if (obs.hasCode() && obs.getCode().hasCoding()) {
+                    boolean isRelevant = obs.getCode().getCoding().stream()
+                        .anyMatch(coding -> relevantCodes.contains(coding.getCode()));
+                    
+                    if (isRelevant) {
+                        evidence.addDetail(new Reference("Observation/" + obs.getIdElement().getIdPart()));
+                    }
+                }
             }
-            condition.addEvidence(evidence);
+            
+            // Only add evidence if we found relevant observations
+            if (evidence.hasDetail()) {
+                condition.addEvidence(evidence);
+            }
         }
 
         // Link to encounter
