@@ -74,10 +74,26 @@ public class UpstreamForwarder {
                     obsCopy.setId((String) null);
                     
                     Bundle.BundleEntryComponent e = tx.addEntry().setResource(obsCopy);
-                    String obsId = obs.getIdElement().getIdPart();
+                    
+                    // Use conditional create to avoid duplicates and numeric ID issues
+                    // Build search criteria based on patient, code, and effective date
+                    StringBuilder criteria = new StringBuilder();
+                    if (obs.hasSubject() && obs.getSubject().hasReference()) {
+                        criteria.append("subject=").append(obs.getSubject().getReference());
+                    }
+                    if (obs.hasCode() && obs.getCode().hasCoding() && obs.getCode().getCodingFirstRep().hasCode()) {
+                        if (criteria.length() > 0) criteria.append("&");
+                        criteria.append("code=").append(obs.getCode().getCodingFirstRep().getCode());
+                    }
+                    if (obs.hasEffectiveDateTimeType()) {
+                        if (criteria.length() > 0) criteria.append("&");
+                        criteria.append("date=").append(obs.getEffectiveDateTimeType().getValueAsString());
+                    }
+                    
                     e.getRequest()
-                        .setMethod(Bundle.HTTPVerb.PUT)
-                        .setUrl(obsId != null ? "Observation/" + obsId : "Observation");
+                        .setMethod(Bundle.HTTPVerb.POST)
+                        .setUrl("Observation")
+                        .setIfNoneExist(criteria.length() > 0 ? criteria.toString() : null);
                 }
             }
             
