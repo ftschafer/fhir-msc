@@ -99,6 +99,10 @@ public class ScheduledDiseaseAnalysisService {
                 } catch (Exception e) {
                     logger.error("Failed to forward conditions upstream", e);
                 }
+            } else if (upstreamForwarder == null) {
+                logger.warn("UpstreamForwarder is NULL - conditions NOT forwarded");
+            } else if (newConditions.isEmpty()) {
+                logger.info("No new conditions to forward");
             }
 
             long duration = System.currentTimeMillis() - startTime;

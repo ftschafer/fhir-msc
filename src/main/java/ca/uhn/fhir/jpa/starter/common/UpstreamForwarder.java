@@ -53,17 +53,31 @@ public class UpstreamForwarder {
      * Forward Condition resources to upstream server
      * Used for auto-detected clinical conditions from CDSS
      */
-    public void upsertConditions(List<Condition> conditions) {
+        public void upsertConditions(List<Condition> conditions) {
         if (conditions == null || conditions.isEmpty()) return;
         try {
             Bundle tx = new Bundle().setType(Bundle.BundleType.TRANSACTION);
             for (Condition c : conditions) {
-                Bundle.BundleEntryComponent e = tx.addEntry().setResource(c);
-                String id = c.getIdElement().getIdPart();
-                e.getRequest().setMethod(Bundle.HTTPVerb.PUT)
-                    .setUrl(id != null ? "Condition/" + id : "Condition");
+                // Create a copy without the ID to avoid conflicts
+                Condition conditionCopy = c.copy();
+                conditionCopy.setId((String) null);
+                
+                Bundle.BundleEntryComponent e = tx.addEntry().setResource(conditionCopy);
+                
+                // Use conditional create based on patient reference
+                String patientRef = c.getSubject().getReference();
+                String code = c.getCode().getCodingFirstRep().getCode();
+                
+                e.getRequest()
+                    .setMethod(Bundle.HTTPVerb.POST)
+                    .setUrl("Condition")
+                    .setIfNoneExist("patient=" + patientRef + "&code=" + code + "&clinical-status=active");
             }
             client.transaction().withBundle(tx).execute();
-        } catch (Exception ignored) { }
+        } catch (Exception e) {
+            System.err.println("ERROR forwarding conditions: " + e.getMessage());
+            e.printStackTrace();
+            throw new RuntimeException("Failed to forward conditions", e);
+        }
     }
 }
