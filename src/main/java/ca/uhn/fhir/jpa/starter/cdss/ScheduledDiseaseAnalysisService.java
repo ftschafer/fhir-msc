@@ -50,7 +50,7 @@ public class ScheduledDiseaseAnalysisService {
     };
 
     // Run every 5 minutes (300000 ms)
-    @Scheduled(fixedDelay = 300000, initialDelay = 20000)
+    @Scheduled(fixedDelay = 3000, initialDelay = 20000)
     public void analyzeAllPatients() {
         logger.info("========================================");
         logger.info("SCHEDULED DISEASE ANALYSIS - Starting");
