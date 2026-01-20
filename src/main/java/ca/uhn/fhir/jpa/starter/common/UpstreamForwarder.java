@@ -1,11 +1,14 @@
 package ca.uhn.fhir.jpa.starter.common;
 
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 import org.hl7.fhir.r4.model.Bundle;
 import org.hl7.fhir.r4.model.Condition;
 import org.hl7.fhir.r4.model.Observation;
 import org.hl7.fhir.r4.model.Patient;
+import org.hl7.fhir.r4.model.Reference;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
@@ -65,15 +68,19 @@ public class UpstreamForwarder {
     public void upsertConditionsWithObservations(List<Condition> conditions, List<Observation> observations) {
         if (conditions == null || conditions.isEmpty()) return;
         try {
-            Bundle tx = new Bundle().setType(Bundle.BundleType.TRANSACTION);
+            Map<String, String> oldToNewObservationIds = new HashMap<>();
             
-            // First, add all Observations (if provided)
+            // Step 1: First post all Observations and get their new IDs
             if (observations != null && !observations.isEmpty()) {
+                Bundle obsTx = new Bundle().setType(Bundle.BundleType.TRANSACTION);
+                
                 for (Observation obs : observations) {
+                    String oldId = obs.getIdElement().getIdPart();
+                    
                     Observation obsCopy = obs.copy();
                     obsCopy.setId((String) null);
                     
-                    Bundle.BundleEntryComponent e = tx.addEntry().setResource(obsCopy);
+                    Bundle.BundleEntryComponent e = obsTx.addEntry().setResource(obsCopy);
                     
                     // Use conditional create to avoid duplicates and numeric ID issues
                     // Build search criteria based on patient, code, and effective date
@@ -95,15 +102,49 @@ public class UpstreamForwarder {
                         .setUrl("Observation")
                         .setIfNoneExist(criteria.length() > 0 ? criteria.toString() : null);
                 }
+                
+                // Execute Observation transaction and map old IDs to new IDs
+                Bundle obsResponse = client.transaction().withBundle(obsTx).execute();
+                for (int i = 0; i < observations.size(); i++) {
+                    String oldId = observations.get(i).getIdElement().getIdPart();
+                    if (obsResponse.getEntry().size() > i && obsResponse.getEntry().get(i).hasResponse()) {
+                        String location = obsResponse.getEntry().get(i).getResponse().getLocation();
+                        if (location != null) {
+                            // Extract new ID from location header (e.g., "Observation/123/_history/1")
+                            String newId = extractIdFromLocation(location);
+                            if (newId != null) {
+                                oldToNewObservationIds.put(oldId, newId);
+                            }
+                        }
+                    }
+                }
+                System.out.println("Posted " + observations.size() + " Observations, mapped " + oldToNewObservationIds.size() + " IDs");
             }
             
-            // Then, add all Conditions
+            // Step 2: Update Condition references and post Conditions
+            Bundle conditionTx = new Bundle().setType(Bundle.BundleType.TRANSACTION);
+            
             for (Condition c : conditions) {
                 // Create a copy without the ID to avoid conflicts
                 Condition conditionCopy = c.copy();
                 conditionCopy.setId((String) null);
                 
-                Bundle.BundleEntryComponent e = tx.addEntry().setResource(conditionCopy);
+                // Update Observation references in evidence
+                if (conditionCopy.hasEvidence()) {
+                    for (Condition.ConditionEvidenceComponent evidence : conditionCopy.getEvidence()) {
+                        for (Reference ref : evidence.getDetail()) {
+                            if (ref.getReference() != null && ref.getReference().startsWith("Observation/")) {
+                                String oldObsId = ref.getReference().substring("Observation/".length());
+                                String newObsId = oldToNewObservationIds.get(oldObsId);
+                                if (newObsId != null) {
+                                    ref.setReference("Observation/" + newObsId);
+                                }
+                            }
+                        }
+                    }
+                }
+                
+                Bundle.BundleEntryComponent e = conditionTx.addEntry().setResource(conditionCopy);
                 
                 // Use conditional create based on patient reference
                 String patientRef = c.getSubject().getReference();
@@ -114,11 +155,27 @@ public class UpstreamForwarder {
                     .setUrl("Condition")
                     .setIfNoneExist("patient=" + patientRef + "&code=" + code + "&clinical-status=active");
             }
-            client.transaction().withBundle(tx).execute();
+            
+            client.transaction().withBundle(conditionTx).execute();
+            
         } catch (Exception e) {
             System.err.println("ERROR forwarding conditions: " + e.getMessage());
             e.printStackTrace();
             throw new RuntimeException("Failed to forward conditions", e);
         }
+    }
+    
+    /**
+     * Extract resource ID from location header
+     * Example: "Observation/123/_history/1" -> "123"
+     */
+    private String extractIdFromLocation(String location) {
+        if (location == null) return null;
+        // Location format: "ResourceType/id/_history/version" or "ResourceType/id"
+        String[] parts = location.split("/");
+        if (parts.length >= 2) {
+            return parts[1]; // Return the ID part
+        }
+        return null;
     }
 }
