@@ -1,28 +1,27 @@
 package ca.uhn.fhir.jpa.starter.common;
 
-import ca.uhn.fhir.context.FhirContext;
-import ca.uhn.fhir.interceptor.api.Hook;
-import ca.uhn.fhir.interceptor.api.Pointcut;
-import org.hl7.fhir.r4.model.Observation;
-import org.hl7.fhir.r4.model.Bundle;
-import org.hl7.fhir.r4.model.Extension;
-import org.hl7.fhir.r4.model.IntegerType;
-import org.hl7.fhir.r4.model.DateTimeType;
-
 import java.math.BigDecimal;
 
 import org.hl7.fhir.instance.model.api.IBaseResource;
-import org.springframework.stereotype.Component;
-import ca.uhn.fhir.rest.api.server.RequestDetails;
-import ca.uhn.fhir.rest.api.server.storage.TransactionDetails;
+import org.hl7.fhir.r4.model.Extension;
+import org.hl7.fhir.r4.model.IntegerType;
+import org.hl7.fhir.r4.model.Observation;
+import org.hl7.fhir.r4.model.StringType;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.stereotype.Component;
+
+import ca.uhn.fhir.interceptor.api.Hook;
+import ca.uhn.fhir.interceptor.api.Pointcut;
+import ca.uhn.fhir.rest.api.server.RequestDetails;
+import ca.uhn.fhir.rest.api.server.storage.TransactionDetails;
 
 @Component
 public class News2Interceptor {
     private final Logger ourLog = LoggerFactory.getLogger(News2Interceptor.class);
 
     private static final String NEWS2_EXTENSION_URL = "http://news2-score";
+    private static final String LOCATION_EXTENSION_URL = "http://patient-location";
     
     // This hook runs for every Observation created in storage (not just HTTP)
     @Hook(Pointcut.STORAGE_PRESTORAGE_RESOURCE_CREATED)
@@ -37,6 +36,17 @@ public class News2Interceptor {
                 existing.setValue(new IntegerType(score));
             } else {
                 obs.addExtension(new Extension(NEWS2_EXTENSION_URL, new IntegerType(score)));
+            }
+            
+            // Add hardcoded location extension
+            Extension locationExt = obs.getExtensionByUrl(LOCATION_EXTENSION_URL);
+            if (locationExt == null) {
+                locationExt = new Extension(LOCATION_EXTENSION_URL);
+                Extension blockExt = new Extension();
+                blockExt.setUrl("block");
+                blockExt.setValue(new StringType("North"));
+                locationExt.addExtension(blockExt);
+                obs.addExtension(locationExt);
             }
         }
     }

@@ -6,6 +6,7 @@ import java.util.Map;
 
 import org.hl7.fhir.r4.model.Bundle;
 import org.hl7.fhir.r4.model.Condition;
+import org.hl7.fhir.r4.model.Extension;
 import org.hl7.fhir.r4.model.Observation;
 import org.hl7.fhir.r4.model.Patient;
 import org.hl7.fhir.r4.model.Reference;
@@ -30,13 +31,34 @@ public class UpstreamForwarder {
         try {
             Bundle tx = new Bundle().setType(Bundle.BundleType.TRANSACTION);
             for (Observation o : observations) {
-                Bundle.BundleEntryComponent e = tx.addEntry().setResource(o);
-                String id = o.getIdElement().getIdPart();
+                Observation obsCopy = o.copy();
+                obsCopy.setId((String) null);
+                
+                Bundle.BundleEntryComponent e = tx.addEntry().setResource(obsCopy);
+                
+                // Build conditional criteria to update existing observations instead of creating duplicates
+                StringBuilder criteria = new StringBuilder();
+                if (o.hasSubject() && o.getSubject().hasReference()) {
+                    criteria.append("subject=").append(o.getSubject().getReference());
+                }
+                if (o.hasCode() && o.getCode().hasCoding() && o.getCode().getCodingFirstRep().hasCode()) {
+                    if (criteria.length() > 0) criteria.append("&");
+                    criteria.append("code=").append(o.getCode().getCodingFirstRep().getCode());
+                }
+                if (o.hasEffectiveDateTimeType()) {
+                    if (criteria.length() > 0) criteria.append("&");
+                    criteria.append("date=").append(o.getEffectiveDateTimeType().getValueAsString());
+                }
+                
+                // Use PUT with conditional URL to update existing observations or create new ones
                 e.getRequest().setMethod(Bundle.HTTPVerb.PUT)
-                    .setUrl(id != null ? "Observation/" + id : "Observation");
+                    .setUrl("Observation?" + (criteria.length() > 0 ? criteria.toString() : "identifier=temp"));
             }
             client.transaction().withBundle(tx).execute();
-        } catch (Exception ignored) { }
+        } catch (Exception e) {
+            System.err.println("ERROR forwarding observations: " + e.getMessage());
+            e.printStackTrace();
+        }
     }
 
     public void upsertPatients(List<Patient> patients) {
@@ -64,13 +86,14 @@ public class UpstreamForwarder {
     /**
      * Forward Condition resources along with their referenced Observations to upstream server
      * Ensures all referenced Observations exist before creating Conditions
+     * Note: Patients should be forwarded first using upsertPatients() before calling this method
      */
     public void upsertConditionsWithObservations(List<Condition> conditions, List<Observation> observations) {
         if (conditions == null || conditions.isEmpty()) return;
         try {
             Map<String, String> oldToNewObservationIds = new HashMap<>();
             
-            // Step 1: First post all Observations and get their new IDs
+            // Step 1: Post all Observations and get their new IDs
             if (observations != null && !observations.isEmpty()) {
                 Bundle obsTx = new Bundle().setType(Bundle.BundleType.TRANSACTION);
                 
@@ -79,6 +102,17 @@ public class UpstreamForwarder {
                     
                     Observation obsCopy = obs.copy();
                     obsCopy.setId((String) null);
+                    
+                    // Remove any existing location extensions and add the hardcoded one
+                    obsCopy.getExtension().removeIf(ext -> "http://patient-location".equals(ext.getUrl()));
+                    
+                    Extension locationExtension = new Extension();
+                    locationExtension.setUrl("http://patient-location");
+                    Extension blockExtension = new Extension();
+                    blockExtension.setUrl("block");
+                    blockExtension.setValue(new org.hl7.fhir.r4.model.StringType("North"));
+                    locationExtension.addExtension(blockExtension);
+                    obsCopy.addExtension(locationExtension);
                     
                     Bundle.BundleEntryComponent e = obsTx.addEntry().setResource(obsCopy);
                     
@@ -97,10 +131,10 @@ public class UpstreamForwarder {
                         criteria.append("date=").append(obs.getEffectiveDateTimeType().getValueAsString());
                     }
                     
+                    // Use conditional UPDATE (PUT) to update existing observations or create new ones
                     e.getRequest()
-                        .setMethod(Bundle.HTTPVerb.POST)
-                        .setUrl("Observation")
-                        .setIfNoneExist(criteria.length() > 0 ? criteria.toString() : null);
+                        .setMethod(Bundle.HTTPVerb.PUT)
+                        .setUrl("Observation?" + (criteria.length() > 0 ? criteria.toString() : "identifier=temp"));
                 }
                 
                 // Execute Observation transaction and map old IDs to new IDs

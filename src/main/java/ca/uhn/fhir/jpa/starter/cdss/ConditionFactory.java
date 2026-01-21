@@ -13,6 +13,7 @@ import org.hl7.fhir.r4.model.Extension;
 import org.hl7.fhir.r4.model.Location;
 import org.hl7.fhir.r4.model.Observation;
 import org.hl7.fhir.r4.model.Reference;
+import org.hl7.fhir.r4.model.StringType;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
@@ -120,12 +121,21 @@ public class ConditionFactory {
             condition.setEncounter(new Reference("Encounter/" + encounter.getIdElement().getIdPart()));
         }
 
-        // Add location as extension (matches News2AggregationService pattern)
+        // Add hardcoded location extension for upstream tracking
+        Extension locationExtension = new Extension();
+        locationExtension.setUrl("http://patient-location");
+        Extension blockExtension = new Extension();
+        blockExtension.setUrl("block");
+        blockExtension.setValue(new StringType("North"));
+        locationExtension.addExtension(blockExtension);
+        condition.addExtension(locationExtension);
+
+        // Add location as extension (matches News2AggregationService pattern) - keep for local tracking
         if (location != null) {
-            Extension locationExtension = new Extension();
-            locationExtension.setUrl(LOCATION_EXTENSION_URL);
-            locationExtension.setValue(new Reference("Location/" + location.getIdElement().getIdPart()));
-            condition.addExtension(locationExtension);
+            Extension localLocationExtension = new Extension();
+            localLocationExtension.setUrl(LOCATION_EXTENSION_URL);
+            localLocationExtension.setValue(new Reference("Location/" + location.getIdElement().getIdPart()));
+            condition.addExtension(localLocationExtension);
 
             logger.debug("Added location extension: {}", location.getName());
         }

@@ -88,6 +88,21 @@ public class ScheduledDiseaseAnalysisService {
             List<IBaseResource> patients = patientResults.getAllResources();
 
             logger.info("Found {} patients to analyze", patients.size());
+            
+            // Forward all patients first to ensure they exist upstream
+            if (upstreamForwarder != null && !patients.isEmpty()) {
+                try {
+                    List<Patient> patientList = patients.stream()
+                        .filter(p -> p instanceof Patient)
+                        .map(p -> (Patient) p)
+                        .collect(java.util.stream.Collectors.toList());
+                    logger.info("Forwarding {} patients to upstream server", patientList.size());
+                    upstreamForwarder.upsertPatients(patientList);
+                    logger.info("✓ Successfully forwarded patients upstream");
+                } catch (Exception e) {
+                    logger.error("Failed to forward patients upstream", e);
+                }
+            }
 
             List<Condition> newConditions = new ArrayList<>();
             Set<String> observationIds = new HashSet<>();
