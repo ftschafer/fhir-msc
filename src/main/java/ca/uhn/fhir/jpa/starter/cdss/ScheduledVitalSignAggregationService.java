@@ -1,29 +1,43 @@
-package ca.uhn.fhir.jpa.starter.common;
+package ca.uhn.fhir.jpa.starter.cdss;
 
-import ca.uhn.fhir.jpa.api.dao.DaoRegistry;
-import ca.uhn.fhir.jpa.api.dao.IFhirResourceDao;
-import ca.uhn.fhir.jpa.searchparam.SearchParameterMap;
-import ca.uhn.fhir.rest.api.server.IBundleProvider;
-import ca.uhn.fhir.rest.param.TokenParam;
+import java.util.ArrayList;
+import java.util.Date;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.stream.Collectors;
+
 import org.hl7.fhir.instance.model.api.IBaseResource;
-import org.hl7.fhir.r4.model.*;
+import org.hl7.fhir.r4.model.CodeableConcept;
+import org.hl7.fhir.r4.model.Coding;
+import org.hl7.fhir.r4.model.DateTimeType;
+import org.hl7.fhir.r4.model.Extension;
+import org.hl7.fhir.r4.model.IntegerType;
+import org.hl7.fhir.r4.model.Observation;
+import org.hl7.fhir.r4.model.Quantity;
+import org.hl7.fhir.r4.model.StringType;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
-import java.util.*;
-import java.util.stream.Collectors;
+import ca.uhn.fhir.jpa.api.dao.DaoRegistry;
+import ca.uhn.fhir.jpa.api.dao.IFhirResourceDao;
+import ca.uhn.fhir.jpa.searchparam.SearchParameterMap;
+import ca.uhn.fhir.jpa.starter.common.UpstreamForwarder;
+import ca.uhn.fhir.rest.api.server.IBundleProvider;
+import ca.uhn.fhir.rest.param.DateRangeParam;
+import ca.uhn.fhir.rest.param.TokenParam;
 
 /**
- * Service that calculates average vital signs by location and forwards them to upstream server.
- * Runs every 30 seconds to compute location-based vital sign averages.
+ * Scheduled service that calculates average vital signs and forwards them to upstream server.
+ * Runs every 5 minutes to compute vital sign averages from recent observations.
  */
 @Service
-public class VitalSignAggregationService {
+public class ScheduledVitalSignAggregationService {
 
-    private static final Logger logger = LoggerFactory.getLogger(VitalSignAggregationService.class);
+    private static final Logger logger = LoggerFactory.getLogger(ScheduledVitalSignAggregationService.class);
 
     @Autowired
     private DaoRegistry daoRegistry;
@@ -85,11 +99,19 @@ public class VitalSignAggregationService {
             // Forward aggregate observations to upstream server
             if (!aggregateObservations.isEmpty() && upstreamForwarder != null) {
                 try {
+                    // First save to local database
+                    IFhirResourceDao<Observation> observationDao = daoRegistry.getResourceDao(Observation.class);
+                    for (Observation aggObs : aggregateObservations) {
+                        observationDao.create(aggObs);
+                    }
+                    logger.info("✓ Saved {} aggregate observations to local database", aggregateObservations.size());
+                    
+                    // Then forward to upstream
                     logger.info("Forwarding {} aggregate observations to upstream server", aggregateObservations.size());
                     upstreamForwarder.createObservations(aggregateObservations);
                     logger.info("✓ Successfully forwarded aggregate observations");
                 } catch (Exception e) {
-                    logger.error("Failed to forward aggregate observations", e);
+                    logger.error("Failed to save/forward aggregate observations", e);
                 }
             } else if (upstreamForwarder == null) {
                 logger.warn("UpstreamForwarder is NULL - aggregates NOT forwarded");
@@ -116,11 +138,12 @@ public class VitalSignAggregationService {
         IFhirResourceDao<Observation> observationDao = daoRegistry.getResourceDao(Observation.class);
         
         SearchParameterMap searchMap = new SearchParameterMap();
+        // Source observations should be the standard vital signs category
         searchMap.add("category", new TokenParam("http://terminology.hl7.org/CodeSystem/observation-category", "vital-signs"));
         
         // Last 5 minutes (300000 ms) to match the schedule interval
         Date fiveMinutesAgo = new Date(System.currentTimeMillis() - 300000);
-        searchMap.add("date", new ca.uhn.fhir.rest.param.DateRangeParam(fiveMinutesAgo, null));
+        searchMap.add("date", new DateRangeParam(fiveMinutesAgo, null));
         searchMap.setLoadSynchronous(true);
 
         IBundleProvider results = observationDao.search(searchMap);
@@ -179,12 +202,12 @@ public class VitalSignAggregationService {
         // Set status
         obs.setStatus(Observation.ObservationStatus.FINAL);
         
-        // Set category - use "vital-signs" but add extension to indicate it's aggregate
+        // Set category - use "vital-signs-average" to distinguish from source observations
         CodeableConcept category = new CodeableConcept();
         category.addCoding()
             .setSystem("http://terminology.hl7.org/CodeSystem/observation-category")
-            .setCode("vital-signs")
-            .setDisplay("Vital Signs");
+            .setCode("vital-signs-average")
+            .setDisplay("Vital Signs Average");
         obs.addCategory(category);
         
         // Add extension to indicate this is aggregate data

@@ -1,18 +1,7 @@
 package ca.uhn.fhir.jpa.starter;
 
-import ca.uhn.fhir.batch2.jobs.config.Batch2JobsConfig;
-import ca.uhn.fhir.jpa.batch2.JpaBatch2Config;
-import ca.uhn.fhir.jpa.starter.annotations.OnEitherVersion;
-import ca.uhn.fhir.jpa.starter.cdshooks.StarterCdsHooksConfig;
-import ca.uhn.fhir.jpa.starter.common.News2Aggregate;
-import ca.uhn.fhir.jpa.starter.cr.StarterCrDstu3Config;
-import ca.uhn.fhir.jpa.starter.cr.StarterCrR4Config;
-import ca.uhn.fhir.jpa.starter.mdm.MdmConfig;
-import ca.uhn.fhir.jpa.subscription.channel.config.SubscriptionChannelConfig;
-import ca.uhn.fhir.jpa.subscription.match.config.SubscriptionProcessorConfig;
-import ca.uhn.fhir.jpa.subscription.match.config.WebsocketDispatcherConfig;
-import ca.uhn.fhir.jpa.subscription.submit.config.SubscriptionSubmitterConfig;
-import ca.uhn.fhir.rest.server.RestfulServer;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.config.AutowireCapableBeanFactory;
 import org.springframework.boot.SpringApplication;
@@ -27,8 +16,19 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Conditional;
 import org.springframework.context.annotation.Import;
 import org.springframework.scheduling.annotation.EnableScheduling;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+
+import ca.uhn.fhir.batch2.jobs.config.Batch2JobsConfig;
+import ca.uhn.fhir.jpa.batch2.JpaBatch2Config;
+import ca.uhn.fhir.jpa.starter.annotations.OnEitherVersion;
+import ca.uhn.fhir.jpa.starter.cdshooks.StarterCdsHooksConfig;
+import ca.uhn.fhir.jpa.starter.cr.StarterCrDstu3Config;
+import ca.uhn.fhir.jpa.starter.cr.StarterCrR4Config;
+import ca.uhn.fhir.jpa.starter.mdm.MdmConfig;
+import ca.uhn.fhir.jpa.subscription.channel.config.SubscriptionChannelConfig;
+import ca.uhn.fhir.jpa.subscription.match.config.SubscriptionProcessorConfig;
+import ca.uhn.fhir.jpa.subscription.match.config.WebsocketDispatcherConfig;
+import ca.uhn.fhir.jpa.subscription.submit.config.SubscriptionSubmitterConfig;
+import ca.uhn.fhir.rest.server.RestfulServer;
 
 @ServletComponentScan(basePackageClasses = {RestfulServer.class})
 @SpringBootApplication(

@@ -1,11 +1,11 @@
 package ca.uhn.fhir.jpa.starter.cdss;
 
-import ca.uhn.fhir.rest.server.RestfulServer;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.ComponentScan;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.scheduling.annotation.EnableScheduling;
 
+import ca.uhn.fhir.rest.server.RestfulServer;
 import jakarta.annotation.PostConstruct;
 
 /**
@@ -23,6 +23,9 @@ public class CdssConfig {
     @Autowired(required = false)
     private ScheduledDiseaseAnalysisService scheduledDiseaseAnalysisService;
 
+    @Autowired(required = false)
+    private ScheduledVitalSignAggregationService scheduledVitalSignAggregationService;
+
     @PostConstruct
     public void init() {
         System.out.println("========================================");
@@ -34,10 +37,15 @@ public class CdssConfig {
             System.out.println("✓ Scheduled disease analysis service enabled (runs every 5 minutes)");
         }
         
+        if (scheduledVitalSignAggregationService != null) {
+            System.out.println("✓ Scheduled vital sign aggregation service enabled (runs every 5 minutes)");
+        }
+        
         System.out.println("========================================");
         System.out.println("CDSS Module Ready");
         System.out.println("Features:");
         System.out.println("  - Scheduled analysis every 5 minutes");
+        System.out.println("  - Scheduled vital sign aggregation every 5 minutes");
         System.out.println("  - CQL-based disease detection");
         System.out.println("  - Automatic Condition creation");
         System.out.println("  - Duplicate prevention");
