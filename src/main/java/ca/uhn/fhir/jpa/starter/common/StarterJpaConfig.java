@@ -301,7 +301,8 @@ public class StarterJpaConfig {
 			ApplicationContext appContext,
 			Optional<IpsOperationProvider> theIpsOperationProvider,
 			Optional<IImplementationGuideOperationProvider> implementationGuideOperationProvider,
-			DiffProvider diffProvider) {
+			DiffProvider diffProvider,
+			DashboardProvider dashboardProvider) {
 		RestfulServer fhirServer = new RestfulServer(fhirSystemDao.getContext());
 
 		List<String> supportedResourceTypes = appProperties.getSupported_resource_types();
@@ -327,6 +328,11 @@ public class StarterJpaConfig {
 		// fhirServer.registerInterceptor(patientTotalNews2ScoreInterceptor);
 		fhirServer.registerInterceptor(news2AggregationInterceptorDB);
 		fhirServer.registerInterceptor(observationBlockInterceptor);
+		
+		// Register custom dashboard provider
+		fhirServer.registerProvider(dashboardProvider);
+		ourLog.info("✓ Registered DashboardProvider for $dashboard-stats operation");
+		
 		fhirServer.setServerConformanceProvider(calculateConformanceProvider(
 				fhirSystemDao, fhirServer, jpaStorageSettings, searchParamRegistry, theValidationSupport));
 

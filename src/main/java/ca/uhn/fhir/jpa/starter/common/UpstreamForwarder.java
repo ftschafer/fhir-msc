@@ -36,23 +36,30 @@ public class UpstreamForwarder {
                 
                 Bundle.BundleEntryComponent e = tx.addEntry().setResource(obsCopy);
                 
-                // Build conditional criteria to update existing observations instead of creating duplicates
-                StringBuilder criteria = new StringBuilder();
-                if (o.hasSubject() && o.getSubject().hasReference()) {
-                    criteria.append("subject=").append(o.getSubject().getReference());
-                }
-                if (o.hasCode() && o.getCode().hasCoding() && o.getCode().getCodingFirstRep().hasCode()) {
-                    if (criteria.length() > 0) criteria.append("&");
-                    criteria.append("code=").append(o.getCode().getCodingFirstRep().getCode());
-                }
-                if (o.hasEffectiveDateTimeType()) {
-                    if (criteria.length() > 0) criteria.append("&");
-                    criteria.append("date=").append(o.getEffectiveDateTimeType().getValueAsString());
+                // Prefer stable identifier when available to avoid duplicate aggregates
+                String conditionalUrl = null;
+                if (o.hasIdentifier() && o.getIdentifierFirstRep().hasSystem() && o.getIdentifierFirstRep().hasValue()) {
+                    conditionalUrl = "Observation?identifier=" + o.getIdentifierFirstRep().getSystem() + "|" + o.getIdentifierFirstRep().getValue();
+                } else {
+                    // Build conditional criteria to update existing observations instead of creating duplicates
+                    StringBuilder criteria = new StringBuilder();
+                    if (o.hasSubject() && o.getSubject().hasReference()) {
+                        criteria.append("subject=").append(o.getSubject().getReference());
+                    }
+                    if (o.hasCode() && o.getCode().hasCoding() && o.getCode().getCodingFirstRep().hasCode()) {
+                        if (criteria.length() > 0) criteria.append("&");
+                        criteria.append("code=").append(o.getCode().getCodingFirstRep().getCode());
+                    }
+                    if (o.hasEffectiveDateTimeType()) {
+                        if (criteria.length() > 0) criteria.append("&");
+                        criteria.append("date=").append(o.getEffectiveDateTimeType().getValueAsString());
+                    }
+                    conditionalUrl = "Observation?" + (criteria.length() > 0 ? criteria.toString() : "identifier=temp");
                 }
                 
                 // Use PUT with conditional URL to update existing observations or create new ones
                 e.getRequest().setMethod(Bundle.HTTPVerb.PUT)
-                    .setUrl("Observation?" + (criteria.length() > 0 ? criteria.toString() : "identifier=temp"));
+                    .setUrl(conditionalUrl);
             }
             client.transaction().withBundle(tx).execute();
         } catch (Exception e) {

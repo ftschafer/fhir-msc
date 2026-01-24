@@ -2,7 +2,7 @@
 server:
   #  servlet:
   #    context-path: /example/path
-  port: 8080
+  port: 8085
   tomcat:
     # allow | as a separator in the URL
     relaxed-query-chars: "|"
@@ -107,6 +107,11 @@ spring:
 #      hibernate.search.backend.analysis.configurer: ca.uhn.fhir.jpa.search.HapiHSearchAnalysisConfigurers$HapiElasticAnalysisConfigurer
 hapi:
   fhir:
+    ### Location configuration - defines what layer this server represents
+    location:
+      # Current layer: block (will add neighborhood and city in higher layers)
+      block: "North"
+    
     ### This flag when enabled to true, will avail evaluate measure operations from CR Module.
     ### Flag is false by default, can be passed as command line argument to override.
     cr:
@@ -178,10 +183,10 @@ hapi:
     #   use_apache_address_strategy_https: false
     ### enables the server to overwrite defaults on HTML, css, etc. under the url pattern of eg. /content/custom **
     ### Folder with custom content MUST be named custom. If omitted then default content applies
-    #custom_content_path: ./custom
+    custom_content_path: ./custom
     ### enables the server host custom content. If e.g. the value ./configs/app is supplied then the content
     ### will be served under /web/app
-    #app_content_path: ./configs/app
+    app_content_path: ./configs/app
     ### enable to set the Server URL
     #    server_address: http://hapi.fhir.org/baseR4
     #    defer_indexing_for_codesystems_of_size: 101

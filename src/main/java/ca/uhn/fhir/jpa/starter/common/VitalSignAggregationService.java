@@ -1,44 +1,37 @@
-package ca.uhn.fhir.jpa.starter.cdss;
-
-import java.util.ArrayList;
-import java.util.Date;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.stream.Collectors;
-
-import org.hl7.fhir.instance.model.api.IBaseResource;
-import org.hl7.fhir.r4.model.CodeableConcept;
-import org.hl7.fhir.r4.model.Coding;
-import org.hl7.fhir.r4.model.DateTimeType;
-import org.hl7.fhir.r4.model.Extension;
-import org.hl7.fhir.r4.model.IntegerType;
-import org.hl7.fhir.r4.model.Observation;
-import org.hl7.fhir.r4.model.Quantity;
-import org.hl7.fhir.r4.model.StringType;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.beans.factory.annotation.Value;
-import org.springframework.scheduling.annotation.Scheduled;
-import org.springframework.stereotype.Service;
+package ca.uhn.fhir.jpa.starter.common;
 
 import ca.uhn.fhir.jpa.api.dao.DaoRegistry;
 import ca.uhn.fhir.jpa.api.dao.IFhirResourceDao;
 import ca.uhn.fhir.jpa.searchparam.SearchParameterMap;
-import ca.uhn.fhir.jpa.starter.common.UpstreamForwarder;
 import ca.uhn.fhir.rest.api.server.IBundleProvider;
-import ca.uhn.fhir.rest.param.DateRangeParam;
 import ca.uhn.fhir.rest.param.TokenParam;
+import org.hl7.fhir.instance.model.api.IBaseResource;
+import org.hl7.fhir.r4.model.*;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.context.event.ApplicationReadyEvent;
+import org.springframework.context.event.EventListener;
+import org.springframework.scheduling.annotation.Scheduled;
+import org.springframework.stereotype.Service;
+
+import java.util.*;
+import java.util.stream.Collectors;
 
 /**
- * Scheduled service that calculates average vital signs and forwards them to upstream server.
- * Runs every 5 minutes to compute vital sign averages from recent observations.
+ * Service that calculates average vital signs by location and forwards them to upstream server.
+ * Runs every 30 seconds to compute location-based vital sign averages.
  */
 @Service
-public class ScheduledVitalSignAggregationService {
+public class VitalSignAggregationService {
 
-    private static final Logger logger = LoggerFactory.getLogger(ScheduledVitalSignAggregationService.class);
+    static {
+        System.out.println("=================================================");
+        System.out.println("VitalSignAggregationService CLASS LOADING");
+        System.out.println("=================================================");
+    }
+
+    private static final Logger logger = LoggerFactory.getLogger(VitalSignAggregationService.class);
     private static final String AGGREGATE_IDENTIFIER_SYSTEM = "urn:aggregate:vitalsign";
 
     @Autowired
@@ -46,9 +39,6 @@ public class ScheduledVitalSignAggregationService {
 
     @Autowired(required = false)
     private UpstreamForwarder upstreamForwarder;
-    
-    @Value("${hapi.fhir.location.block:Block-Default}")
-    private String currentBlock;
 
     // Vital sign LOINC codes we track
     private static final Map<String, String> VITAL_SIGN_CODES = new HashMap<String, String>() {{
@@ -60,8 +50,23 @@ public class ScheduledVitalSignAggregationService {
         put("59408-5", "Oxygen saturation");
     }};
 
-    // Run every 5 minutes (300000 ms), initial delay 20 seconds
-    @Scheduled(fixedDelay = 300, initialDelay = 200)
+    public VitalSignAggregationService() {
+        logger.info("*** VitalSignAggregationService CONSTRUCTOR - Service is being created ***");
+    }
+
+    @EventListener(ApplicationReadyEvent.class)
+    public void runOnceOnStartup() {
+        // Kick off an initial run shortly after startup for visibility
+        try {
+            logger.info("Application ready: triggering initial vital sign aggregation run");
+            calculateAndForwardAverages();
+        } catch (Exception e) {
+            logger.error("Initial aggregation run failed", e);
+        }
+    }
+
+    // Run every 5 minutes (300000 ms), initial delay 5 seconds
+    @Scheduled(fixedDelay = 300000, initialDelay = 5000)
     public void calculateAndForwardAverages() {
         logger.info("========================================");
         logger.info("VITAL SIGN AGGREGATION - Starting");
@@ -94,21 +99,21 @@ public class ScheduledVitalSignAggregationService {
 
                 List<Double> normalizedValues = extractNormalizedValues(observations, code);
                 if (normalizedValues.isEmpty()) {
-                    logger.info("Block {}: {} skipped (no valid values)", currentBlock, VITAL_SIGN_CODES.get(code));
+                    logger.info("Location {}: {} skipped (no valid values)", location, VITAL_SIGN_CODES.get(code));
                     continue;
                 }
 
                 double average = normalizedValues.stream().mapToDouble(Double::doubleValue).average().orElse(0.0);
                 int sampleCount = normalizedValues.size();
 
-                String aggregateIdentifier = buildAggregateIdentifier(code);
-                Observation aggregateObs = createAggregateObservation(currentBlock, code, average, sampleCount, aggregateIdentifier);
+                String aggregateIdentifier = buildAggregateIdentifier(location, code);
+                Observation aggregateObs = createAggregateObservation(location, code, average, sampleCount, aggregateIdentifier);
                 aggregateObservations.add(aggregateObs);
-                logger.info("Block {}: {} avg = {} (n={})", currentBlock, VITAL_SIGN_CODES.get(code), 
+                logger.info("Location {}: {} avg = {} (n={})", location, VITAL_SIGN_CODES.get(code), 
                            String.format("%.2f", average), sampleCount);
             }
 
-            // Forward aggregate observations to upstream server
+            // Upsert aggregates locally then forward upstream
             if (!aggregateObservations.isEmpty()) {
                 IFhirResourceDao<Observation> observationDao = daoRegistry.getResourceDao(Observation.class);
                 List<Observation> persistedAggregates = new ArrayList<>();
@@ -169,7 +174,7 @@ public class ScheduledVitalSignAggregationService {
         
         // Last 5 minutes (300000 ms) to match the schedule interval
         Date fiveMinutesAgo = new Date(System.currentTimeMillis() - 300000);
-        searchMap.add("date", new DateRangeParam(fiveMinutesAgo, null));
+        searchMap.add("date", new ca.uhn.fhir.rest.param.DateRangeParam(fiveMinutesAgo, null));
         searchMap.setLoadSynchronous(true);
 
         IBundleProvider results = observationDao.search(searchMap);
@@ -315,12 +320,12 @@ public class ScheduledVitalSignAggregationService {
         // Set status
         obs.setStatus(Observation.ObservationStatus.FINAL);
 
-        // Stable identifier so each schedule run updates the same aggregate instead of adding duplicates
+        // Stable identifier so each run updates instead of duplicating
         obs.addIdentifier()
             .setSystem(AGGREGATE_IDENTIFIER_SYSTEM)
             .setValue(aggregateIdentifier);
         
-        // Set category - use "vital-signs-average" to distinguish from source observations
+        // Set category - use "vital-signs" but add extension to indicate it's aggregate
         CodeableConcept category = new CodeableConcept();
         category.addCoding()
             .setSystem("http://terminology.hl7.org/CodeSystem/observation-category")
@@ -337,12 +342,12 @@ public class ScheduledVitalSignAggregationService {
             .setDisplay("Average"));
         obs.addExtension(aggregateExt);
         
-        // Add location extension (only block level for now)
+        // Add location extension
         Extension locationExt = new Extension();
         locationExt.setUrl("http://patient-location");
         Extension blockExt = new Extension();
         blockExt.setUrl("block");
-        blockExt.setValue(new StringType(currentBlock));
+        blockExt.setValue(new StringType(location));
         locationExt.addExtension(blockExt);
         obs.addExtension(locationExt);
         
@@ -373,10 +378,10 @@ public class ScheduledVitalSignAggregationService {
     }
 
     /**
-     * Build a stable identifier for aggregated observations (block + LOINC code)
+     * Build stable identifier per location and LOINC code
      */
-    private String buildAggregateIdentifier(String loincCode) {
-        return currentBlock + "-" + loincCode;
+    private String buildAggregateIdentifier(String location, String loincCode) {
+        return location + "-" + loincCode;
     }
 
     /**
