@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>FHIR Clinical Dashboard - Block Level</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
     <style>
         * {
             margin: 0;
@@ -167,6 +168,30 @@
             font-size: 12px;
             padding: 10px;
         }
+        .chart-container {
+            position: relative;
+            height: 400px;
+            margin: 20px 0;
+        }
+        .chart-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(500px, 1fr));
+            gap: 20px;
+            margin-bottom: 20px;
+        }
+        .chart-card {
+            background: white;
+            padding: 20px;
+            border-radius: 10px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        }
+        .chart-title {
+            font-size: 16px;
+            font-weight: 600;
+            color: #333;
+            margin-bottom: 15px;
+            text-align: center;
+        }
     </style>
 </head>
 <body>
@@ -270,11 +295,21 @@
                     </tbody>
                 </table>
             </div>
+
+            <div class="data-section">
+                <h2 class="section-title">📈 30-Day Vital Sign History</h2>
+                <p style="color: #666; margin-bottom: 15px;">Real-time trends showing all calculated averages (updates every aggregation cycle)</p>
+                <div class="chart-grid" id="chartsContainer">
+                    <!-- Charts will be inserted here -->
+                </div>
+            </div>
         </div>
     </div>
 
     <script>
         let autoRefreshInterval;
+        let chartInstances = {}; // Store chart instances for updates
+        
         function toFixedSafe(val, digits) {
             const n = Number(val);
             return Number.isFinite(n) ? n.toFixed(digits) : 'N/A';
@@ -309,6 +344,17 @@
                 loading.style.display = 'none';
                 content.style.display = 'block';
                 document.getElementById('lastUpdate').textContent = new Date().toLocaleTimeString();
+                
+                // Load historical data for charts
+                // If no block filter specified, detect the block from location stats
+                let blockToLoad = blockFilter;
+                if (!blockToLoad && data.locationStats && data.locationStats.length > 0) {
+                    // Use the first location with patients as the block
+                    blockToLoad = data.locationStats[0].location;
+                    console.log('Auto-detected block from location stats:', blockToLoad);
+                }
+                await loadHistoricalData(blockToLoad);
+                
             } catch (err) {
                 console.error('Dashboard error:', err);
                 loading.style.display = 'none';
@@ -396,6 +442,172 @@
             } else {
                 vitalSignsBody.innerHTML = '<tr><td colspan="3" style="text-align:center;">No vital sign averages available</td></tr>';
             }
+        }
+
+        async function loadHistoricalData(blockFilter) {
+            try {
+                // Use the provided block, or fall back to 'North' as a reasonable default
+                const block = blockFilter || 'North';
+                const url = `/fhir/Observation/%24vital-history?block=${encodeURIComponent(block)}&days=30`;
+                
+                console.log('Loading historical data from:', url);
+                console.log('Block filter:', blockFilter, '-> using block:', block);
+                
+                const response = await fetch(url);
+                if (!response.ok) {
+                    console.error('Failed to load historical data:', response.status, response.statusText);
+                    const container = document.getElementById('chartsContainer');
+                    container.innerHTML = `<p style="text-align:center; color:#dc3545; padding:40px;">Failed to load historical data (HTTP ${response.status}). Check the server logs.</p>`;
+                    return;
+                }
+                
+                const historyData = await response.json();
+                console.log('Historical data received:', historyData);
+                console.log('Number of vital signs with data:', Object.keys(historyData).length);
+                
+                renderCharts(historyData);
+                
+            } catch (err) {
+                console.error('Error loading historical data:', err);
+                const container = document.getElementById('chartsContainer');
+                container.innerHTML = `<p style="text-align:center; color:#dc3545; padding:40px;">Error: ${err.message}</p>`;
+            }
+        }
+
+        function renderCharts(historyData) {
+            const container = document.getElementById('chartsContainer');
+            
+            // Define chart colors for each vital sign
+            const chartColors = {
+                '8867-4': { bg: 'rgba(255, 99, 132, 0.2)', border: 'rgba(255, 99, 132, 1)' },  // Heart rate - Red
+                '9279-1': { bg: 'rgba(54, 162, 235, 0.2)', border: 'rgba(54, 162, 235, 1)' },  // Respiratory rate - Blue
+                '8480-6': { bg: 'rgba(255, 206, 86, 0.2)', border: 'rgba(255, 206, 86, 1)' },  // Systolic BP - Yellow
+                '8462-4': { bg: 'rgba(75, 192, 192, 0.2)', border: 'rgba(75, 192, 192, 1)' },  // Diastolic BP - Teal
+                '8310-5': { bg: 'rgba(153, 102, 255, 0.2)', border: 'rgba(153, 102, 255, 1)' }, // Temperature - Purple
+                '59408-5': { bg: 'rgba(255, 159, 64, 0.2)', border: 'rgba(255, 159, 64, 1)' }   // SpO2 - Orange
+            };
+            
+            // Clear existing charts
+            Object.values(chartInstances).forEach(chart => chart.destroy());
+            chartInstances = {};
+            container.innerHTML = '';
+            
+            // Check if we have data
+            if (!historyData || Object.keys(historyData).length === 0) {
+                container.innerHTML = `
+                    <p style="text-align:center; color:#666; padding:40px;">
+                        <strong>No historical data available yet.</strong><br><br>
+                        Historical data will appear after the aggregation service runs a few times.<br>
+                        The service runs every 5 minutes and needs at least one cycle to collect data.<br><br>
+                        <em>Tip: Make sure patients have vital sign observations in the system.</em>
+                    </p>`;
+                return;
+            }
+            
+            console.log('Rendering charts for vital signs:', Object.keys(historyData));
+            
+            // Create a chart for each vital sign
+            Object.entries(historyData).forEach(([code, vitalData]) => {
+                console.log(`Processing vital sign ${code}:`, vitalData);
+                
+                if (!vitalData.data || vitalData.data.length === 0) {
+                    console.log(`Skipping ${code} - no data points`);
+                    return; // Skip if no data
+                }
+                
+                console.log(`Creating chart for ${vitalData.name} with ${vitalData.data.length} data points`);
+                
+                // Create chart card
+                const chartCard = document.createElement('div');
+                chartCard.className = 'chart-card';
+                
+                const chartTitle = document.createElement('div');
+                chartTitle.className = 'chart-title';
+                chartTitle.textContent = vitalData.name;
+                chartCard.appendChild(chartTitle);
+                
+                const canvasContainer = document.createElement('div');
+                canvasContainer.className = 'chart-container';
+                
+                const canvas = document.createElement('canvas');
+                canvas.id = `chart-${code}`;
+                canvasContainer.appendChild(canvas);
+                chartCard.appendChild(canvasContainer);
+                
+                container.appendChild(chartCard);
+                
+                // Prepare data - format timestamps for display
+                const labels = vitalData.data.map(d => {
+                    const date = new Date(d.timestamp);
+                    return date.toLocaleString('en-US', { 
+                        month: 'short', 
+                        day: 'numeric', 
+                        hour: '2-digit', 
+                        minute: '2-digit' 
+                    });
+                });
+                const values = vitalData.data.map(d => d.value);
+                
+                // Get colors
+                const colors = chartColors[code] || { 
+                    bg: 'rgba(102, 126, 234, 0.2)', 
+                    border: 'rgba(102, 126, 234, 1)' 
+                };
+                
+                // Create chart
+                const ctx = canvas.getContext('2d');
+                const chart = new Chart(ctx, {
+                    type: 'line',
+                    data: {
+                        labels: labels,
+                        datasets: [{
+                            label: vitalData.name,
+                            data: values,
+                            backgroundColor: colors.bg,
+                            borderColor: colors.border,
+                            borderWidth: 2,
+                            tension: 0.3,
+                            fill: true,
+                            pointRadius: 4,
+                            pointHoverRadius: 6
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: {
+                            legend: {
+                                display: false
+                            },
+                            tooltip: {
+                                callbacks: {
+                                    label: function(context) {
+                                        return vitalData.name + ': ' + context.parsed.y.toFixed(2);
+                                    }
+                                }
+                            }
+                        },
+                        scales: {
+                            y: {
+                                beginAtZero: false,
+                                ticks: {
+                                    callback: function(value) {
+                                        return value.toFixed(1);
+                                    }
+                                }
+                            },
+                            x: {
+                                ticks: {
+                                    maxRotation: 45,
+                                    minRotation: 45
+                                }
+                            }
+                        }
+                    }
+                });
+                
+                chartInstances[code] = chart;
+            });
         }
 
         // Auto-refresh every 30 seconds

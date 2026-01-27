@@ -302,7 +302,8 @@ public class StarterJpaConfig {
 			Optional<IpsOperationProvider> theIpsOperationProvider,
 			Optional<IImplementationGuideOperationProvider> implementationGuideOperationProvider,
 			DiffProvider diffProvider,
-			DashboardProvider dashboardProvider) {
+			DashboardProvider dashboardProvider,
+			VitalSignHistoryProvider vitalSignHistoryProvider) {
 		RestfulServer fhirServer = new RestfulServer(fhirSystemDao.getContext());
 
 		List<String> supportedResourceTypes = appProperties.getSupported_resource_types();
@@ -332,6 +333,10 @@ public class StarterJpaConfig {
 		// Register custom dashboard provider
 		fhirServer.registerProvider(dashboardProvider);
 		ourLog.info("✓ Registered DashboardProvider for $dashboard-stats operation");
+		
+		// Register vital sign history provider
+		fhirServer.registerProvider(vitalSignHistoryProvider);
+		ourLog.info("✓ Registered VitalSignHistoryProvider for $vital-history operation");
 		
 		fhirServer.setServerConformanceProvider(calculateConformanceProvider(
 				fhirSystemDao, fhirServer, jpaStorageSettings, searchParamRegistry, theValidationSupport));

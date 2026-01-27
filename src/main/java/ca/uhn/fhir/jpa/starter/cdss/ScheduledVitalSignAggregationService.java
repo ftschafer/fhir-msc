@@ -47,6 +47,9 @@ public class ScheduledVitalSignAggregationService {
     @Autowired(required = false)
     private UpstreamForwarder upstreamForwarder;
     
+    @Autowired
+    private VitalSignHistoryService historyService;
+    
     @Value("${hapi.fhir.location.block:Block-Default}")
     private String currentBlock;
 
@@ -61,7 +64,7 @@ public class ScheduledVitalSignAggregationService {
     }};
 
     // Run every 5 minutes (300000 ms), initial delay 20 seconds
-    @Scheduled(fixedDelay = 300, initialDelay = 200)
+    @Scheduled(fixedDelay = 800, initialDelay = 800)
     public void calculateAndForwardAverages() {
         logger.info("========================================");
         logger.info("VITAL SIGN AGGREGATION - Starting");
@@ -104,6 +107,11 @@ public class ScheduledVitalSignAggregationService {
                 String aggregateIdentifier = buildAggregateIdentifier(code);
                 Observation aggregateObs = createAggregateObservation(currentBlock, code, average, sampleCount, aggregateIdentifier);
                 aggregateObservations.add(aggregateObs);
+                
+                // Store in history for charting
+                historyService.addDataPoint(currentBlock, code, average, sampleCount);
+                logger.info("✓ Stored in history: block={}, code={}, avg={}", currentBlock, code, String.format("%.2f", average));
+                
                 logger.info("Block {}: {} avg = {} (n={})", currentBlock, VITAL_SIGN_CODES.get(code), 
                            String.format("%.2f", average), sampleCount);
             }
