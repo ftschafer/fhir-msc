@@ -19,6 +19,9 @@ import ca.uhn.fhir.rest.client.interceptor.SimpleRequestHeaderInterceptor;
 
 @Component
 public class UpstreamForwarder {
+    @Value("${hapi.fhir.location.block:North}")
+    private String blockValue;
+    
     private final IGenericClient client;
 
     @Value("${hapi.fhir.location.block:North}")

@@ -30,7 +30,7 @@ import jakarta.servlet.http.HttpServletResponse;
 
 /**
  * Provides a custom dashboard API endpoint that aggregates clinical data
- * Accessible at: GET [base]/Patient/$dashboard-stats?block=Block-North-A
+ * Accessible at: GET [base]/Patient/$dashboard-stats?block=Block-A
  */
 @Component
 public class DashboardProvider implements IResourceProvider {

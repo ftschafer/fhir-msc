@@ -7,11 +7,13 @@ import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.PersistenceContext;
+import org.hl7.fhir.instance.model.api.IBaseResource;
+import org.hl7.fhir.r4.model.*;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
-import org.hl7.fhir.r4.model.*;
 
 import java.time.Instant;
 import java.util.*;
@@ -26,7 +28,6 @@ public class News2AggregationService {
     private static final String NEWS2_EXTENSION_URL = "http://news2-score";
     private static final String LOCATION_EXTENSION_URL = "http://patient-location";
     private static final String BLOCK_URL = "block";
-    private static final String BLOCK_VALUE = "North";
 
     private static final Set<String> LOINC_CODES =
             Set.of("8867-4", "9279-1", "8310-5", "59408-5", "8480-6");
@@ -42,6 +43,9 @@ public class News2AggregationService {
 
     @PersistenceContext
     private EntityManager em;
+
+    @Value("${hapi.fhir.location.block:North}")
+    private String blockValue;
 
     private final DaoRegistry daoRegistry;
     private final FhirContext fhirContext;
@@ -201,7 +205,7 @@ public class News2AggregationService {
 
         if (!hasBlock) {
             locExt.addExtension(
-                    new Extension().setUrl(BLOCK_URL).setValue(new StringType(BLOCK_VALUE)));
+                    new Extension().setUrl(BLOCK_URL).setValue(new StringType(blockValue)));
             patientModified = true;
         }
 

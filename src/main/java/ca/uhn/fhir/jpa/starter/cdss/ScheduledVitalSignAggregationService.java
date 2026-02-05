@@ -73,8 +73,8 @@ public class ScheduledVitalSignAggregationService {
         long startTime = System.currentTimeMillis();
 
         try {
-            // Hardcoded location
-            String location = "North";
+            // Use configured block location
+            String location = currentBlock;
             
             // Get recent vital signs from last 5 minutes (matching the schedule interval)
             List<Observation> recentVitalSigns = getRecentVitalSigns();

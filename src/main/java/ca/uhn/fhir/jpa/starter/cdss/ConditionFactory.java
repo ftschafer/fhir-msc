@@ -16,6 +16,7 @@ import org.hl7.fhir.r4.model.Reference;
 import org.hl7.fhir.r4.model.StringType;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 /**
@@ -26,6 +27,9 @@ import org.springframework.stereotype.Component;
 public class ConditionFactory {
 
     private static final Logger logger = LoggerFactory.getLogger(ConditionFactory.class);
+
+    @Value("${hapi.fhir.location.block:North}")
+    private String blockValue;
 
     // Extension URL for patient location (matches News2AggregationService pattern)
     private static final String LOCATION_EXTENSION_URL = "http://patient-location";
@@ -126,7 +130,7 @@ public class ConditionFactory {
         locationExtension.setUrl("http://patient-location");
         Extension blockExtension = new Extension();
         blockExtension.setUrl("block");
-        blockExtension.setValue(new StringType("North"));
+        blockExtension.setValue(new StringType(blockValue));
         locationExtension.addExtension(blockExtension);
         condition.addExtension(locationExtension);
 

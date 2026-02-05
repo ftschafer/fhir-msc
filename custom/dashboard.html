@@ -446,8 +446,8 @@
 
         async function loadHistoricalData(blockFilter) {
             try {
-                // Use the provided block, or fall back to 'North' as a reasonable default
-                const block = blockFilter || 'North';
+                // Use the provided block, or fall back to 'Center' as a reasonable default
+                const block = blockFilter || 'Unknown';
                 const url = `/fhir/Observation/%24vital-history?block=${encodeURIComponent(block)}&days=30`;
                 
                 console.log('Loading historical data from:', url);

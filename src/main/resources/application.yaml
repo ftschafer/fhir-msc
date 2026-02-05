@@ -2,7 +2,7 @@
 server:
   #  servlet:
   #    context-path: /example/path
-  port: 8085
+  port: 8071
   tomcat:
     # allow | as a separator in the URL
     relaxed-query-chars: "|"
@@ -110,7 +110,7 @@ hapi:
     ### Location configuration - defines what layer this server represents
     location:
       # Current layer: block (will add neighborhood and city in higher layers)
-      block: "North"
+      block: "Center"
     
     ### This flag when enabled to true, will avail evaluate measure operations from CR Module.
     ### Flag is false by default, can be passed as command line argument to override.
@@ -375,4 +375,4 @@ logging:
     org.hibernate.SQL: off
 upstream:
   fhir:
-    base-url: http://18.218.25.8:8081/fhir
+    base-url: http://localhost:8081/fhir
