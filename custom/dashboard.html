@@ -1,0 +1,402 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NEWS2 Block Dashboard</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+        
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        
+        header {
+            text-align: center;
+            color: white;
+            margin-bottom: 40px;
+        }
+        
+        h1 {
+            font-size: 2.5em;
+            margin-bottom: 10px;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
+        }
+        
+        .subtitle {
+            font-size: 1.1em;
+            opacity: 0.9;
+        }
+        
+        .controls {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            margin-bottom: 30px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        }
+        
+        .control-group {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+        }
+        
+        label {
+            font-weight: 500;
+            color: #333;
+        }
+        
+        input[type="text"] {
+            padding: 10px 15px;
+            border: 2px solid #ddd;
+            border-radius: 4px;
+            font-size: 1em;
+            transition: border-color 0.3s;
+        }
+        
+        input[type="text"]:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+        
+        button {
+            padding: 10px 20px;
+            background: #667eea;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            font-size: 1em;
+            cursor: pointer;
+            transition: background 0.3s;
+        }
+        
+        button:hover {
+            background: #5568d3;
+        }
+        
+        button:active {
+            transform: scale(0.98);
+        }
+        
+        .summary {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+        
+        .summary-card {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            text-align: center;
+        }
+        
+        .summary-label {
+            color: #666;
+            font-size: 0.9em;
+            margin-bottom: 10px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+        
+        .summary-value {
+            font-size: 2.5em;
+            font-weight: bold;
+            color: #667eea;
+        }
+        
+        .blocks-container {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+            gap: 20px;
+        }
+        
+        .block-card {
+            background: white;
+            border-radius: 8px;
+            padding: 20px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            transition: transform 0.3s, box-shadow 0.3s;
+        }
+        
+        .block-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 8px 12px rgba(0,0,0,0.15);
+        }
+        
+        .block-header {
+            border-bottom: 3px solid #667eea;
+            padding-bottom: 15px;
+            margin-bottom: 15px;
+        }
+        
+        .block-name {
+            font-size: 1.5em;
+            font-weight: bold;
+            color: #333;
+            margin-bottom: 5px;
+        }
+        
+        .block-location {
+            font-size: 0.9em;
+            color: #666;
+        }
+        
+        .block-stats {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 15px;
+        }
+        
+        .stat-item {
+            padding: 10px;
+            background: #f8f9fa;
+            border-radius: 4px;
+        }
+        
+        .stat-label {
+            font-size: 0.85em;
+            color: #666;
+            margin-bottom: 5px;
+        }
+        
+        .stat-value {
+            font-size: 1.5em;
+            font-weight: bold;
+            color: #667eea;
+        }
+        
+        .stat-value.average {
+            color: #764ba2;
+        }
+        
+        .stat-value.patients {
+            color: #f093fb;
+        }
+        
+        .loading {
+            text-align: center;
+            color: white;
+            font-size: 1.1em;
+        }
+        
+        .error {
+            background: #f8d7da;
+            color: #721c24;
+            padding: 15px;
+            border-radius: 4px;
+            margin-bottom: 20px;
+            border: 1px solid #f5c6cb;
+        }
+        
+        .empty {
+            background: white;
+            padding: 40px;
+            border-radius: 8px;
+            text-align: center;
+            color: #666;
+        }
+        
+        @media (max-width: 768px) {
+            .block-stats {
+                grid-template-columns: 1fr;
+            }
+            
+            h1 {
+                font-size: 1.8em;
+            }
+            
+            .summary {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>NEWS2 Block Dashboard</h1>
+            <p class="subtitle">Real-time health aggregation by neighborhood</p>
+        </header>
+        
+        <div class="controls">
+            <div class="control-group">
+                <label for="blockFilter">Filter by Block:</label>
+                <input type="text" id="blockFilter" placeholder="e.g., Block-North-A (leave empty for all)">
+                <button onclick="loadDashboard()">Load</button>
+            </div>
+        </div>
+        
+        <div id="content"></div>
+    </div>
+    
+    <script>
+        const BASE_URL = window.location.origin;
+        
+        function loadDashboard() {
+            const blockFilter = document.getElementById('blockFilter').value.trim();
+            const content = document.getElementById('content');
+            
+            content.innerHTML = '<div class="loading">Loading dashboard data...</div>';
+            
+            let url = `${BASE_URL}/fhir/Patient/$dashboard-stats`;
+            if (blockFilter) {
+                url += `?block=${encodeURIComponent(blockFilter)}`;
+            }
+            
+            fetch(url)
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                    }
+                    return response.json();
+                })
+                .then(data => {
+                    renderDashboard(data);
+                })
+                .catch(error => {
+                    console.error('Error loading dashboard:', error);
+                    content.innerHTML = `
+                        <div class="error">
+                            <strong>Error:</strong> ${error.message}<br>
+                            <small>Make sure the FHIR server is running and accessible at ${BASE_URL}/fhir</small>
+                        </div>
+                    `;
+                });
+        }
+        
+        function renderDashboard(data) {
+            const content = document.getElementById('content');
+            
+            let html = '';
+            
+            // Summary cards
+            html += '<div class="summary">';
+            html += `
+                <div class="summary-card">
+                    <div class="summary-label">Total Patients</div>
+                    <div class="summary-value">${data.totalPatients}</div>
+                </div>
+                <div class="summary-card">
+                    <div class="summary-label">Total Conditions</div>
+                    <div class="summary-value">${data.totalConditions}</div>
+                </div>
+            `;
+            html += '</div>';
+            
+            // Neighborhood stats section
+            if (data.neighborhoodStats && data.neighborhoodStats.length > 0) {
+                html += '<h2 style="color: white; margin: 30px 0 20px 0;">Neighborhood Averages</h2>';
+                html += '<div class="summary">';
+                data.neighborhoodStats.forEach(ns => {
+                    html += `
+                        <div class="summary-card">
+                            <div class="summary-label">${escapeHtml(ns.neighborhood)}</div>
+                            <div class="summary-value">${ns.avgNews2.toFixed(1)}</div>
+                            <div class="summary-label" style="margin-top: 10px;">${ns.patientCount} patients</div>
+                        </div>
+                    `;
+                });
+                html += '</div>';
+            }
+            
+            // Block cards
+            if (data.blockStats && data.blockStats.length > 0) {
+                html += '<h2 style="color: white; margin: 30px 0 20px 0;">Block Details</h2>';
+                html += '<div class="blocks-container">';
+                
+                // Sort by block name
+                data.blockStats.sort((a, b) => a.block.localeCompare(b.block));
+                
+                data.blockStats.forEach(block => {
+                    const avgNews2 = block.avgNews2;
+                    
+                    html += `
+                        <div class="block-card">
+                            <div class="block-header">
+                                <div class="block-name">${escapeHtml(block.block)}</div>
+                                <div class="block-location">${escapeHtml(block.region)} • ${escapeHtml(block.city)}</div>
+                            </div>
+                            <div class="block-stats">
+                                <div class="stat-item">
+                                    <div class="stat-label">Patients</div>
+                                    <div class="stat-value patients">${block.patientCount}</div>
+                                </div>
+                                <div class="stat-item">
+                                    <div class="stat-label">Conditions</div>
+                                    <div class="stat-value">${block.conditionCount}</div>
+                                </div>
+                                <div class="stat-item">
+                                    <div class="stat-label">Avg NEWS2</div>
+                                    <div class="stat-value average">${avgNews2.toFixed(1)}</div>
+                                </div>
+                                <div class="stat-item">
+                                    <div class="stat-label">Risk Level</div>
+                                    <div class="stat-value">${getRiskLevelBadge(parseFloat(avgNews2))}</div>
+                                </div>
+                            </div>
+                    `;
+                    
+                    // Add vital sign averages if available
+                    if (block.vitalSignAverages && block.vitalSignAverages.length > 0) {
+                        html += '<div style="margin-top: 15px; padding-top: 15px; border-top: 1px solid #e0e0e0;">';
+                        html += '<div style="font-size: 0.9em; color: #666; margin-bottom: 10px; font-weight: 500;">Vital Signs</div>';
+                        block.vitalSignAverages.forEach(vsa => {
+                            html += `
+                                <div style="display: flex; justify-content: space-between; padding: 5px 0; font-size: 0.85em;">
+                                    <span style="color: #666;">${escapeHtml(vsa.vitalSign)}</span>
+                                    <span style="font-weight: bold; color: #667eea;">${vsa.averageValue.toFixed(2)} ${escapeHtml(vsa.unit)}</span>
+                                </div>
+                            `;
+                        });
+                        html += '</div>';
+                    }
+                    
+                    html += '</div>'; // close block-card
+                });
+                
+                html += '</div>';
+            } else {
+                html += '<div class="empty">No block data available</div>';
+            }
+            
+            content.innerHTML = html;
+        }
+        
+        function getRiskLevelBadge(score) {
+            if (score >= 7) return '🔴 HIGH';
+            if (score >= 5) return '🟡 MEDIUM';
+            return '🟢 LOW';
+        }
+        
+        function escapeHtml(text) {
+            const map = {
+                '&': '&amp;',
+                '<': '&lt;',
+                '>': '&gt;',
+                '"': '&quot;',
+                "'": '&#039;'
+            };
+            return text.replace(/[&<>"']/g, m => map[m]);
+        }
+        
+        // Load dashboard on page load
+        window.addEventListener('load', loadDashboard);
+    </script>
+</body>
+</html>

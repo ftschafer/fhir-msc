@@ -29,8 +29,10 @@ public class BlockNews2AggregationService {
     private static final String NEWS2_EXTENSION_URL = "http://news2-score";
     private static final String LOCATION_EXTENSION_URL = "http://patient-location";
     private static final String NEIGH_URL = "neighborhood";
-    private static final String NEIGH_VALUE = "center";
     private static final String BLOCK_URL = "block"; // define region URL
+    
+    @org.springframework.beans.factory.annotation.Value("${location.neighborhood:center}")
+    private String neighborhoodValue;
     
     // Metrics
     private static final String METRIC_BUNDLE_TIMER = "fhir_news2_bundle_processing";
@@ -120,8 +122,21 @@ public class BlockNews2AggregationService {
                 ? ((IntegerType) news2Ext.getValue()).getValue()
                 : 0;
 
-        // We don’t use Patient block; keep UNKNOWN
-        String block = "UNKNOWN";
+        // Extract block from patient location (no longer hardcoded to UNKNOWN)
+        String block = null;
+        if (locExt != null) {
+            for (Extension nested : locExt.getExtension()) {
+                if ("block".equals(nested.getUrl()) && nested.getValue() != null) {
+                    block = nested.getValue().primitiveValue();
+                    break;
+                }
+            }
+        }
+        block = normalize(block);
+        if (block == null || block.isEmpty()) {
+            block = "UNKNOWN";
+        }
+        
         String oldBlock = pb == null ? null : pb.getBlock();
         Integer oldScore = pb == null ? null : pb.getLastScore();
         boolean moved = pb != null && !Objects.equals(oldBlock, block);
@@ -164,7 +179,7 @@ public class BlockNews2AggregationService {
         if (!hasNeighborhood) {
             locExt.addExtension(new Extension()
                 .setUrl(NEIGH_URL)
-                .setValue(new StringType(NEIGH_VALUE)));
+                .setValue(new StringType(neighborhoodValue)));
             patientDao().update(patient);
             
             // Forward updated patient upstream AFTER DB commit, asynchronously.
