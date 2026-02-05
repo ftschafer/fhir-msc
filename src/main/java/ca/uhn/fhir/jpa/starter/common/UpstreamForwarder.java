@@ -21,6 +21,9 @@ import ca.uhn.fhir.rest.client.interceptor.SimpleRequestHeaderInterceptor;
 public class UpstreamForwarder {
     private final IGenericClient client;
 
+    @Value("${hapi.fhir.location.block:North}")
+    private String blockValue;
+
     public UpstreamForwarder(FhirContext ctx, @Value("${upstream.fhir.base-url:http://18.218.25.8:8081/fhir}") String upstreamUrl) {
         this.client = ctx.newRestfulGenericClient(upstreamUrl);
         this.client.registerInterceptor(new SimpleRequestHeaderInterceptor("X-Internal-Request", "true"));
@@ -33,6 +36,16 @@ public class UpstreamForwarder {
             for (Observation o : observations) {
                 Observation obsCopy = o.copy();
                 obsCopy.setId((String) null);
+                
+                // Remove any existing location extensions and add the block extension
+                obsCopy.getExtension().removeIf(ext -> "http://patient-location".equals(ext.getUrl()));
+                Extension locationExtension = new Extension();
+                locationExtension.setUrl("http://patient-location");
+                Extension blockExtension = new Extension();
+                blockExtension.setUrl("block");
+                blockExtension.setValue(new org.hl7.fhir.r4.model.StringType(blockValue));
+                locationExtension.addExtension(blockExtension);
+                obsCopy.addExtension(locationExtension);
                 
                 Bundle.BundleEntryComponent e = tx.addEntry().setResource(obsCopy);
                 
@@ -75,11 +88,25 @@ public class UpstreamForwarder {
             for (Patient p : patients) {
                 Bundle.BundleEntryComponent e = tx.addEntry().setResource(p);
                 String id = p.getIdElement().getIdPart();
-                e.getRequest().setMethod(Bundle.HTTPVerb.PUT)
-                    .setUrl(id != null ? "Patient/" + id : "Patient");
+                // Use conditional PUT to update existing or create new patient
+                // Try to match by identifier first, then by ID
+                if (p.hasIdentifier() && p.getIdentifierFirstRep().hasSystem() && p.getIdentifierFirstRep().hasValue()) {
+                    String system = p.getIdentifierFirstRep().getSystem();
+                    String value = p.getIdentifierFirstRep().getValue();
+                    e.getRequest().setMethod(Bundle.HTTPVerb.PUT)
+                        .setUrl("Patient?identifier=" + system + "|" + value);
+                } else {
+                    // Fall back to ID-based update, but use conditional to avoid errors if patient doesn't exist
+                    e.getRequest().setMethod(Bundle.HTTPVerb.PUT)
+                        .setUrl(id != null ? "Patient/" + id : "Patient");
+                }
             }
             client.transaction().withBundle(tx).execute();
-        } catch (Exception ignored) { }
+        } catch (Exception e) {
+            System.err.println("ERROR forwarding patients: " + e.getMessage());
+            e.printStackTrace();
+            throw new RuntimeException("Failed to forward patients", e);
+        }
     }
 
     /**
@@ -92,15 +119,73 @@ public class UpstreamForwarder {
 
     /**
      * Forward Condition resources along with their referenced Observations to upstream server
-     * Ensures all referenced Observations exist before creating Conditions
-     * Note: Patients should be forwarded first using upsertPatients() before calling this method
+     * Ensures all referenced Observations and Patients exist before creating Conditions
      */
     public void upsertConditionsWithObservations(List<Condition> conditions, List<Observation> observations) {
         if (conditions == null || conditions.isEmpty()) return;
         try {
             Map<String, String> oldToNewObservationIds = new HashMap<>();
             
-            // Step 1: Post all Observations and get their new IDs
+            // Step 0: Collect all referenced patients from conditions and observations
+            Map<String, Patient> referencedPatients = new HashMap<>();
+            
+            // Get patients from conditions
+            for (Condition c : conditions) {
+                if (c.hasSubject() && c.getSubject().hasReference()) {
+                    String patientRef = c.getSubject().getReference();
+                    if (patientRef.startsWith("Patient/")) {
+                        String patientId = patientRef.substring("Patient/".length());
+                        if (!referencedPatients.containsKey(patientId)) {
+                            referencedPatients.put(patientId, null); // Mark for later resolution
+                        }
+                    }
+                }
+            }
+            
+            // Get patients from observations
+            if (observations != null) {
+                for (Observation obs : observations) {
+                    if (obs.hasSubject() && obs.getSubject().hasReference()) {
+                        String patientRef = obs.getSubject().getReference();
+                        if (patientRef.startsWith("Patient/")) {
+                            String patientId = patientRef.substring("Patient/".length());
+                            if (!referencedPatients.containsKey(patientId)) {
+                                referencedPatients.put(patientId, null);
+                            }
+                        }
+                    }
+                }
+            }
+            
+            System.out.println("Found " + referencedPatients.size() + " unique patient references to ensure exist upstream");
+            
+            // Step 1: Ensure all referenced patients exist upstream first
+            if (!referencedPatients.isEmpty()) {
+                Bundle patientTx = new Bundle().setType(Bundle.BundleType.TRANSACTION);
+                for (String patientId : referencedPatients.keySet()) {
+                    Bundle.BundleEntryComponent patientEntry = patientTx.addEntry();
+                    // Use conditional create/update to ensure patient exists
+                    patientEntry.setFullUrl("Patient/" + patientId);
+                    patientEntry.getRequest()
+                        .setMethod(Bundle.HTTPVerb.PUT)
+                        .setUrl("Patient/" + patientId)
+                        .setIfNoneExist("_id=" + patientId);
+                    // Create minimal patient resource as placeholder
+                    Patient placeholderPatient = new Patient();
+                    placeholderPatient.setId(patientId);
+                    placeholderPatient.setActive(true);
+                    patientEntry.setResource(placeholderPatient);
+                }
+                try {
+                    client.transaction().withBundle(patientTx).execute();
+                    System.out.println("Ensured " + referencedPatients.size() + " patients exist upstream");
+                } catch (Exception e) {
+                    System.err.println("Warning: Some patients may not exist upstream: " + e.getMessage());
+                    // Continue anyway - the main transaction will fail with a clearer error if patients don't exist
+                }
+            }
+            
+            // Step 2: Post all Observations and get their new IDs
             if (observations != null && !observations.isEmpty()) {
                 Bundle obsTx = new Bundle().setType(Bundle.BundleType.TRANSACTION);
                 
@@ -117,7 +202,7 @@ public class UpstreamForwarder {
                     locationExtension.setUrl("http://patient-location");
                     Extension blockExtension = new Extension();
                     blockExtension.setUrl("block");
-                    blockExtension.setValue(new org.hl7.fhir.r4.model.StringType("North"));
+                    blockExtension.setValue(new org.hl7.fhir.r4.model.StringType(blockValue));
                     locationExtension.addExtension(blockExtension);
                     obsCopy.addExtension(locationExtension);
                     
@@ -162,7 +247,7 @@ public class UpstreamForwarder {
                 System.out.println("Posted " + observations.size() + " Observations, mapped " + oldToNewObservationIds.size() + " IDs");
             }
             
-            // Step 2: Update Condition references and post Conditions
+            // Step 3: Update Condition references and post Conditions
             Bundle conditionTx = new Bundle().setType(Bundle.BundleType.TRANSACTION);
             
             for (Condition c : conditions) {
