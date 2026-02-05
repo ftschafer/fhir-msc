@@ -22,7 +22,7 @@ import jakarta.servlet.http.HttpServletResponse;
 
 /**
  * Provides historical vital sign data for charting.
- * Accessible at: GET [base]/Observation/$vital-history?block=North&days=30
+ * Accessible at: GET [base]/Observation/$vital-history?block=A&days=30
  */
 @Component
 public class VitalSignHistoryProvider implements IResourceProvider {

@@ -10,6 +10,7 @@ import org.hl7.fhir.r4.model.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.event.EventListener;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -39,6 +40,9 @@ public class VitalSignAggregationService {
 
     @Autowired(required = false)
     private UpstreamForwarder upstreamForwarder;
+
+    @Value("${hapi.fhir.location.block:North}")
+    private String blockValue;
 
     // Vital sign LOINC codes we track
     private static final Map<String, String> VITAL_SIGN_CODES = new HashMap<String, String>() {{
@@ -75,8 +79,8 @@ public class VitalSignAggregationService {
         long startTime = System.currentTimeMillis();
 
         try {
-            // Hardcoded location
-            String location = "North";
+            // Use configured block location
+            String location = blockValue;
             
             // Get recent vital signs from last 5 minutes (matching the schedule interval)
             List<Observation> recentVitalSigns = getRecentVitalSigns();

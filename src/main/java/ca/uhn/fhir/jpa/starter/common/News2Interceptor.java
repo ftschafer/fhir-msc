@@ -9,6 +9,7 @@ import org.hl7.fhir.r4.model.Observation;
 import org.hl7.fhir.r4.model.StringType;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 import ca.uhn.fhir.interceptor.api.Hook;
@@ -19,6 +20,9 @@ import ca.uhn.fhir.rest.api.server.storage.TransactionDetails;
 @Component
 public class News2Interceptor {
     private final Logger ourLog = LoggerFactory.getLogger(News2Interceptor.class);
+
+    @Value("${hapi.fhir.location.block:North}")
+    private String blockValue;
 
     private static final String NEWS2_EXTENSION_URL = "http://news2-score";
     private static final String LOCATION_EXTENSION_URL = "http://patient-location";
@@ -44,7 +48,7 @@ public class News2Interceptor {
                 locationExt = new Extension(LOCATION_EXTENSION_URL);
                 Extension blockExt = new Extension();
                 blockExt.setUrl("block");
-                blockExt.setValue(new StringType("North"));
+                blockExt.setValue(new StringType(blockValue));
                 locationExt.addExtension(blockExt);
                 obs.addExtension(locationExt);
             }

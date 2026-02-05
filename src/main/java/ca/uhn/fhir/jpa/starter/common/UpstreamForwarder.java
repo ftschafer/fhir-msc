@@ -19,6 +19,9 @@ import ca.uhn.fhir.rest.client.interceptor.SimpleRequestHeaderInterceptor;
 
 @Component
 public class UpstreamForwarder {
+    @Value("${hapi.fhir.location.block:North}")
+    private String blockValue;
+    
     private final IGenericClient client;
 
     public UpstreamForwarder(FhirContext ctx, @Value("${upstream.fhir.base-url:http://18.218.25.8:8081/fhir}") String upstreamUrl) {
@@ -117,7 +120,7 @@ public class UpstreamForwarder {
                     locationExtension.setUrl("http://patient-location");
                     Extension blockExtension = new Extension();
                     blockExtension.setUrl("block");
-                    blockExtension.setValue(new org.hl7.fhir.r4.model.StringType("North"));
+                    blockExtension.setValue(new org.hl7.fhir.r4.model.StringType(blockValue));
                     locationExtension.addExtension(blockExtension);
                     obsCopy.addExtension(locationExtension);
                     
