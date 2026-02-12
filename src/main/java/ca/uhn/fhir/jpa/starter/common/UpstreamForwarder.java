@@ -24,9 +24,6 @@ public class UpstreamForwarder {
     
     private final IGenericClient client;
 
-    @Value("${hapi.fhir.location.block:North}")
-    private String blockValue;
-
     public UpstreamForwarder(FhirContext ctx, @Value("${upstream.fhir.base-url:http://18.218.25.8:8081/fhir}") String upstreamUrl) {
         this.client = ctx.newRestfulGenericClient(upstreamUrl);
         this.client.registerInterceptor(new SimpleRequestHeaderInterceptor("X-Internal-Request", "true"));

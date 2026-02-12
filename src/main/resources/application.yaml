@@ -110,7 +110,7 @@ hapi:
     ### Location configuration - defines what layer this server represents
     location:
       # Current layer: block (will add neighborhood and city in higher layers)
-      block: "Center"
+      block: "B71"
     
     ### This flag when enabled to true, will avail evaluate measure operations from CR Module.
     ### Flag is false by default, can be passed as command line argument to override.

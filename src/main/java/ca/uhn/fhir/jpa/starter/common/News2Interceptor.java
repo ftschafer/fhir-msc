@@ -3,6 +3,8 @@ package ca.uhn.fhir.jpa.starter.common;
 import java.math.BigDecimal;
 
 import org.hl7.fhir.instance.model.api.IBaseResource;
+import org.hl7.fhir.r4.model.CodeableConcept;
+import org.hl7.fhir.r4.model.Coding;
 import org.hl7.fhir.r4.model.Extension;
 import org.hl7.fhir.r4.model.IntegerType;
 import org.hl7.fhir.r4.model.Observation;
@@ -31,28 +33,58 @@ public class News2Interceptor {
     @Hook(Pointcut.STORAGE_PRESTORAGE_RESOURCE_CREATED)
     public void addNews2ScoreOnCreate(IBaseResource resource, RequestDetails requestDetails, TransactionDetails transactionDetails) {
         if (resource instanceof Observation) {
-            Observation obs = (Observation) resource;
-            int score = computeNews2ForSingleObservation(obs);
-
-            // Update or add NEWS2 extension
-            Extension existing = obs.getExtensionByUrl(NEWS2_EXTENSION_URL);
-            if (existing != null) {
-                existing.setValue(new IntegerType(score));
-            } else {
-                obs.addExtension(new Extension(NEWS2_EXTENSION_URL, new IntegerType(score)));
-            }
-            
-            // Add hardcoded location extension
-            Extension locationExt = obs.getExtensionByUrl(LOCATION_EXTENSION_URL);
-            if (locationExt == null) {
-                locationExt = new Extension(LOCATION_EXTENSION_URL);
-                Extension blockExt = new Extension();
-                blockExt.setUrl("block");
-                blockExt.setValue(new StringType(blockValue));
-                locationExt.addExtension(blockExt);
-                obs.addExtension(locationExt);
-            }
+            fixObservationExtensions((Observation) resource);
         }
+    }
+    
+    // This hook runs for every Observation updated in storage
+    @Hook(Pointcut.STORAGE_PRESTORAGE_RESOURCE_UPDATED)
+    public void addNews2ScoreOnUpdate(IBaseResource oldResource, IBaseResource newResource, RequestDetails requestDetails, TransactionDetails transactionDetails) {
+        if (newResource instanceof Observation) {
+            fixObservationExtensions((Observation) newResource);
+        }
+    }
+    
+    private void fixObservationExtensions(Observation obs) {
+        int score = computeNews2ForSingleObservation(obs);
+
+        // Update or add NEWS2 extension
+        Extension existing = obs.getExtensionByUrl(NEWS2_EXTENSION_URL);
+        if (existing != null) {
+            existing.setValue(new IntegerType(score));
+        } else {
+            obs.addExtension(new Extension(NEWS2_EXTENSION_URL, new IntegerType(score)));
+        }
+        
+        // Add hardcoded location extension (always ensure it has the correct block value)
+        obs.getExtension().removeIf(ext -> LOCATION_EXTENSION_URL.equals(ext.getUrl()));
+        Extension locationExt = new Extension(LOCATION_EXTENSION_URL);
+        Extension blockExt = new Extension();
+        blockExt.setUrl("block");
+        blockExt.setValue(new StringType(blockValue));
+        locationExt.addExtension(blockExt);
+        obs.addExtension(locationExt);
+        
+        // Ensure vital-signs category is set (required for CDSS to pick up observations)
+        if (!hasVitalSignsCategory(obs)) {
+            CodeableConcept category = new CodeableConcept();
+            category.addCoding()
+                .setSystem("http://terminology.hl7.org/CodeSystem/observation-category")
+                .setCode("vital-signs")
+                .setDisplay("Vital Signs");
+            obs.addCategory(category);
+            ourLog.debug("Added vital-signs category to observation {}", obs.getId());
+        }
+    }
+    
+    private boolean hasVitalSignsCategory(Observation obs) {
+        return obs.getCategory().stream()
+            .anyMatch(cat -> cat.getCoding().stream()
+                .anyMatch(coding -> 
+                    "http://terminology.hl7.org/CodeSystem/observation-category".equals(coding.getSystem()) &&
+                    "vital-signs".equals(coding.getCode())
+                )
+            );
     }
 
     private int computeNews2ForSingleObservation(Observation obs) {
