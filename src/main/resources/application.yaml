@@ -96,6 +96,11 @@ spring:
   ### elastic parameters ===> see also elasticsearch section below <===
 #      hibernate.search.backend.type: elasticsearch
 #      hibernate.search.backend.analysis.configurer: ca.uhn.fhir.jpa.search.HapiHSearchAnalysisConfigurers$HapiElasticAnalysisConfigurer
+
+# Location extension configuration
+location:
+  neighborhood: N81
+
 hapi:
   fhir:
     ### This flag when enabled to true, will avail evaluate measure operations from CR Module.
@@ -400,6 +405,3 @@ hapi:
 upstream:
   fhir:
     base-url: http://localhost:8091/fhir
-
-location:
-  neighborhood: center

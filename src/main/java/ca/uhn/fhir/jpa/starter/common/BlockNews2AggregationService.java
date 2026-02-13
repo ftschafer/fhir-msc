@@ -16,7 +16,6 @@ import org.hl7.fhir.r4.model.StringType;
 import org.springframework.stereotype.Service;
 
 import java.util.Date;
-import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
@@ -29,7 +28,7 @@ public class BlockNews2AggregationService {
     private static final String NEWS2_EXTENSION_URL = "http://news2-score";
     private static final String LOCATION_EXTENSION_URL = "http://patient-location";
     private static final String NEIGH_URL = "neighborhood";
-    private static final String BLOCK_URL = "block"; // define region URL
+    private static final String BLOCK_URL = "block";
     
     @org.springframework.beans.factory.annotation.Value("${location.neighborhood:center}")
     private String neighborhoodValue;
@@ -100,41 +99,42 @@ public class BlockNews2AggregationService {
             return;
         }
 
-        // Extract neighborhood and region from location extension
+        // Extract neighborhood from location extension
         String neighborhood = null;
-        String region = null;
         Extension locExt = patient.getExtensionByUrl(LOCATION_EXTENSION_URL);
         if (locExt != null) {
             for (Extension nested : locExt.getExtension()) {
                 if (NEIGH_URL.equals(nested.getUrl()) && nested.getValue() != null) {
                     neighborhood = nested.getValue().primitiveValue();
-                } else if (BLOCK_URL.equals(nested.getUrl()) && nested.getValue() != null) {
-                    region = nested.getValue().primitiveValue();
                 }
             }
         }
         neighborhood = normalize(neighborhood);
-        region = normalize(region);
+        if (neighborhood == null) {
+            neighborhood = normalize(neighborhoodValue);
+        }
 
         // NEWS2 score
         Extension news2Ext = patient.getExtensionByUrl(NEWS2_EXTENSION_URL);
-        int newScore = (news2Ext != null && news2Ext.getValue() instanceof IntegerType)
-                ? ((IntegerType) news2Ext.getValue()).getValue()
-                : 0;
+        int newScore = 0;
+        if (news2Ext != null && news2Ext.getValue() instanceof IntegerType) {
+            Integer score = ((IntegerType) news2Ext.getValue()).getValue();
+            newScore = score != null ? score : 0;
+        }
 
-        // Extract block from patient location (no longer hardcoded to UNKNOWN)
+        // Extract block from patient location
         String block = null;
         if (locExt != null) {
             for (Extension nested : locExt.getExtension()) {
-                if ("block".equals(nested.getUrl()) && nested.getValue() != null) {
+                if (BLOCK_URL.equals(nested.getUrl()) && nested.getValue() != null) {
                     block = nested.getValue().primitiveValue();
                     break;
                 }
             }
         }
         block = normalize(block);
-        if (block == null || block.isEmpty()) {
-            block = "UNKNOWN";
+        if (block == null) {
+            return;
         }
         
         String oldBlock = pb == null ? null : pb.getBlock();
@@ -145,19 +145,19 @@ public class BlockNews2AggregationService {
             pb = new PatientBlock(patientId, block, newScore);
             pb.setLastUpdated(patientLastUpdated);
             em.persist(pb);
-            adjustBlock(region, block, neighborhood, newScore, 1);
+            adjustBlock(block, neighborhood, newScore, 1);
         } else if (moved) {
-            if (oldScore != null) adjustBlock(region, oldBlock, null, -oldScore, -1);
+            if (oldScore != null && oldBlock != null) adjustBlock(oldBlock, neighborhood, -oldScore, -1);
             pb.update(block, newScore);
             pb.setLastUpdated(patientLastUpdated);
             em.merge(pb);
-            adjustBlock(region, block, neighborhood, newScore, 1);
+            adjustBlock(block, neighborhood, newScore, 1);
         } else {
             int delta = (oldScore == null ? newScore : newScore - oldScore);
             pb.update(block, newScore);
             pb.setLastUpdated(patientLastUpdated);
             em.merge(pb);
-            adjustBlock(region, block, neighborhood, delta, 0);
+            adjustBlock(block, neighborhood, delta, 0);
         }
         em.flush();
         
@@ -216,12 +216,12 @@ public class BlockNews2AggregationService {
         }
     }
 
-    // Use region from Patient location extension in aggregation key
-    private void adjustBlock(String region, String block, String neighborhood, int scoreDelta, int patientDelta) {
+    // Aggregate by block + neighborhood only (region is not used)
+    private void adjustBlock(String block, String neighborhood, int scoreDelta, int patientDelta) {
         Timer.Sample upsertSample = Timer.start(meterRegistry);
         
-        String city = normalize(neighborhood) == null ? "UNKNOWN" : normalize(neighborhood);
-        String reg = normalize(region) == null ? "UNKNOWN" : normalize(region);
+        String city = normalize(neighborhood);
+        String reg = "";
 
         BlockKey key = new BlockKey(reg, city, block);
         BlockNews2Aggregate agg = em.find(BlockNews2Aggregate.class, key);
@@ -229,16 +229,16 @@ public class BlockNews2AggregationService {
             agg = new BlockNews2Aggregate(reg, city, block);
             agg.applyDelta(scoreDelta, patientDelta);
             em.persist(agg);
-            upsertSample.stop(meterRegistry.timer(METRIC_UPSERT_TIMER, "operation", "insert", "region", reg));
+            upsertSample.stop(meterRegistry.timer(METRIC_UPSERT_TIMER, "operation", "insert", "neighborhood", city == null ? "" : city));
         } else {
             agg.applyDelta(scoreDelta, patientDelta);
             em.merge(agg);
-            upsertSample.stop(meterRegistry.timer(METRIC_UPSERT_TIMER, "operation", "update", "region", reg));
+            upsertSample.stop(meterRegistry.timer(METRIC_UPSERT_TIMER, "operation", "update", "neighborhood", city == null ? "" : city));
         }
         
         // Track patient count changes
         if (patientDelta != 0) {
-            meterRegistry.counter(METRIC_PATIENTS, "region", reg, "operation", patientDelta > 0 ? "add" : "remove")
+            meterRegistry.counter(METRIC_PATIENTS, "neighborhood", city == null ? "" : city, "operation", patientDelta > 0 ? "add" : "remove")
                 .increment(Math.abs(patientDelta));
         }
     }

@@ -15,6 +15,9 @@ import java.util.List;
 public class UpstreamForwarder {
     private final IGenericClient client;
     private final String neighborhood;
+    private static final String LOCATION_EXTENSION_URL = "http://patient-location";
+    private static final String NEIGH_URL = "neighborhood";
+    private static final String BLOCK_URL = "block";
 
     public UpstreamForwarder(FhirContext ctx, 
                            @Value("${upstream.fhir.base-url:http://localhost:8082/fhir}") String upstreamUrl,
@@ -29,8 +32,10 @@ public class UpstreamForwarder {
         try {
             Bundle tx = new Bundle().setType(Bundle.BundleType.TRANSACTION);
             for (Observation o : observations) {
+                ensureNeighborhoodExtension(o);
                 // Extract block from observation location extension
                 String block = extractBlock(o);
+                if (block == null || block.isBlank()) continue;
                 String scopedId = buildScopedId(neighborhood, block, o.getIdElement().getIdPart());
                 
                 // Add identifier for block-scoped tracking
@@ -51,8 +56,10 @@ public class UpstreamForwarder {
         try {
             Bundle tx = new Bundle().setType(Bundle.BundleType.TRANSACTION);
             for (Patient p : patients) {
+                ensureNeighborhoodExtension(p);
                 // Extract block from patient location extension
                 String block = extractBlock(p);
+                if (block == null || block.isBlank()) continue;
                 String scopedId = buildScopedId(neighborhood, block, p.getIdElement().getIdPart());
                 
                 // Add identifier for block-scoped tracking
@@ -75,19 +82,45 @@ public class UpstreamForwarder {
     private String extractBlock(org.hl7.fhir.r4.model.Resource resource) {
         org.hl7.fhir.r4.model.Extension locExt = null;
         if (resource instanceof Patient) {
-            locExt = ((Patient) resource).getExtensionByUrl("http://patient-location");
+            locExt = ((Patient) resource).getExtensionByUrl(LOCATION_EXTENSION_URL);
         } else if (resource instanceof Observation) {
-            locExt = ((Observation) resource).getExtensionByUrl("http://patient-location");
+            locExt = ((Observation) resource).getExtensionByUrl(LOCATION_EXTENSION_URL);
         }
         
         if (locExt != null) {
             org.hl7.fhir.r4.model.Extension blockExt = locExt.getExtension().stream()
-                .filter(e -> "block".equals(e.getUrl()))
+                .filter(e -> BLOCK_URL.equals(e.getUrl()))
                 .findFirst().orElse(null);
             if (blockExt != null && blockExt.getValue() != null) {
                 return blockExt.getValue().primitiveValue();
             }
         }
-        return "UNKNOWN";
+        return null;
+    }
+
+    private void ensureNeighborhoodExtension(org.hl7.fhir.r4.model.Resource resource) {
+        org.hl7.fhir.r4.model.Extension locExt = null;
+        if (resource instanceof Patient) {
+            locExt = ((Patient) resource).getExtensionByUrl(LOCATION_EXTENSION_URL);
+        } else if (resource instanceof Observation) {
+            locExt = ((Observation) resource).getExtensionByUrl(LOCATION_EXTENSION_URL);
+        }
+        if (locExt == null) {
+            return;
+        }
+
+        boolean hasBlock = locExt.getExtension().stream()
+            .anyMatch(e -> BLOCK_URL.equals(e.getUrl()) && e.getValue() != null);
+        if (!hasBlock) {
+            return;
+        }
+
+        boolean hasNeighborhood = locExt.getExtension().stream()
+            .anyMatch(e -> NEIGH_URL.equals(e.getUrl()) && e.getValue() != null);
+        if (!hasNeighborhood) {
+            locExt.addExtension(new org.hl7.fhir.r4.model.Extension()
+                .setUrl(NEIGH_URL)
+                .setValue(new org.hl7.fhir.r4.model.StringType(neighborhood)));
+        }
     }
 }

@@ -23,8 +23,6 @@ import ca.uhn.fhir.rest.annotation.OperationParam;
 import ca.uhn.fhir.rest.api.server.IBundleProvider;
 import ca.uhn.fhir.rest.param.TokenParam;
 import ca.uhn.fhir.rest.server.IResourceProvider;
-import jakarta.persistence.EntityManager;
-import jakarta.persistence.PersistenceContext;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 
@@ -36,9 +34,6 @@ import jakarta.servlet.http.HttpServletResponse;
 public class DashboardProvider implements IResourceProvider {
 
     private final DaoRegistry daoRegistry;
-    
-    @PersistenceContext
-    private EntityManager em;
     
     // Cache results for 30 seconds
     private DashboardStats cachedStats;
@@ -92,62 +87,64 @@ public class DashboardProvider implements IResourceProvider {
 
     private DashboardStats calculateStats(String filterBlock) {
         DashboardStats stats = new DashboardStats();
-        
-        // Query BlockNews2Aggregate to get block-level aggregates
-        List<BlockNews2Aggregate> blockAggregates;
-        if (filterBlock != null && !filterBlock.isEmpty()) {
-            blockAggregates = em.createQuery(
-                "SELECT b FROM BlockNews2Aggregate b WHERE b.id.block = :block",
-                BlockNews2Aggregate.class
-            )
-            .setParameter("block", filterBlock)
-            .getResultList();
-        } else {
-            blockAggregates = em.createQuery(
-                "SELECT b FROM BlockNews2Aggregate b",
-                BlockNews2Aggregate.class
-            )
-            .getResultList();
-        }
-        
-        // Calculate totals and per-block stats
+
+        // Build per-block stats from current patient state
         Map<String, BlockStats> blockStatsMap = new HashMap<>();
         Map<String, NeighborhoodStats> neighborhoodStatsMap = new HashMap<>();
         int totalPatients = 0;
-        
-        for (BlockNews2Aggregate agg : blockAggregates) {
-            String blockName = agg.getBlock();
-            BlockStats bs = blockStatsMap.computeIfAbsent(blockName, k -> new BlockStats(k));
-            
-            bs.patientCount += agg.getPatientCount();
-            bs.totalScore += agg.getTotalScore();
-            bs.city = agg.getCity();
-            bs.region = agg.getRegion();
-            
-            totalPatients += agg.getPatientCount();
-            
-            // Aggregate by neighborhood (city)
-            String neighborhood = agg.getCity();
-            NeighborhoodStats ns = neighborhoodStatsMap.computeIfAbsent(neighborhood, k -> new NeighborhoodStats(k));
-            ns.totalScore += agg.getTotalScore();
-            ns.patientCount += agg.getPatientCount();
-        }
-        
+
         // Get all patients to map to blocks
         IFhirResourceDao<Patient> patientDao = daoRegistry.getResourceDao(Patient.class);
         SearchParameterMap patientSearch = new SearchParameterMap();
         patientSearch.setLoadSynchronous(true);
         IBundleProvider patientResults = patientDao.search(patientSearch);
         List<IBaseResource> patients = patientResults.getAllResources();
-        
+
         Map<String, String> patientBlockMap = new HashMap<>();
+        Map<String, String> blockNeighborhoodMap = new HashMap<>();
         for (IBaseResource res : patients) {
             Patient patient = (Patient) res;
             String patientId = patient.getIdElement().getIdPart();
             String block = extractBlock(patient);
+            if (block == null || block.isBlank()) {
+                continue;
+            }
             if (filterBlock == null || filterBlock.isEmpty() || block.equals(filterBlock)) {
                 patientBlockMap.put(patientId, block);
+                String neighborhood = extractNeighborhood(patient);
+                if (neighborhood != null && !neighborhood.isBlank()) {
+                    blockNeighborhoodMap.putIfAbsent(block, neighborhood);
+                }
             }
+        }
+
+        // Current patient count and total NEWS2 from Patient resources (source of truth)
+        for (IBaseResource res : patients) {
+            Patient patient = (Patient) res;
+            String blockName = extractBlock(patient);
+            if (blockName == null || blockName.isBlank()) {
+                continue;
+            }
+            if (filterBlock != null && !filterBlock.isEmpty() && !filterBlock.equals(blockName)) {
+                continue;
+            }
+
+            int score = extractNews2Score(patient);
+
+            BlockStats bs = blockStatsMap.computeIfAbsent(blockName, k -> new BlockStats(k));
+            bs.patientCount += 1;
+            bs.totalScore += score;
+
+            String neighborhood = blockNeighborhoodMap.get(blockName);
+            bs.city = neighborhood != null ? neighborhood : "";
+            bs.region = "";
+
+            totalPatients += 1;
+
+            String neighborhoodKey = bs.city == null ? "" : bs.city;
+            NeighborhoodStats ns = neighborhoodStatsMap.computeIfAbsent(neighborhoodKey, k -> new NeighborhoodStats(k));
+            ns.totalScore += score;
+            ns.patientCount += 1;
         }
         
         // Get active conditions grouped by block
@@ -191,7 +188,7 @@ public class DashboardProvider implements IResourceProvider {
                     VitalSignAverage vsa = new VitalSignAverage();
                     vsa.vitalSign = obs.getCode() != null && obs.getCode().hasCoding()
                         ? obs.getCode().getCodingFirstRep().getDisplay()
-                        : "Unknown";
+                        : "";
                     vsa.averageValue = obs.getValueQuantity() != null
                         ? obs.getValueQuantity().getValue().doubleValue()
                         : 0;
@@ -199,9 +196,12 @@ public class DashboardProvider implements IResourceProvider {
                         ? obs.getValueQuantity().getUnit()
                         : "";
                     Extension sampleExt = obs.getExtensionByUrl("http://observation-sample-count");
-                    vsa.sampleCount = sampleExt != null && sampleExt.getValue() instanceof IntegerType
-                        ? ((IntegerType) sampleExt.getValue()).getValue()
-                        : 0;
+                    if (sampleExt != null && sampleExt.getValue() instanceof IntegerType) {
+                        Integer sampleCount = ((IntegerType) sampleExt.getValue()).getValue();
+                        vsa.sampleCount = sampleCount != null ? sampleCount : 0;
+                    } else {
+                        vsa.sampleCount = 0;
+                    }
                     bs.vitalSignAverages.add(vsa);
                 }
             }
@@ -225,7 +225,22 @@ public class DashboardProvider implements IResourceProvider {
                 return ((StringType) blockExt.getValue()).getValue();
             }
         }
-        return "UNKNOWN";
+        return null;
+    }
+
+    private String extractNeighborhood(Patient patient) {
+        Extension locExt = patient.getExtensionByUrl("http://patient-location");
+        if (locExt != null) {
+            for (Extension nested : locExt.getExtension()) {
+                if ("neighborhood".equals(nested.getUrl()) && nested.getValue() instanceof StringType) {
+                    String v = ((StringType) nested.getValue()).getValue();
+                    if (v != null && !v.isBlank()) {
+                        return v;
+                    }
+                }
+            }
+        }
+        return null;
     }
     
     private String extractBlockFromObservation(Observation obs) {
@@ -241,10 +256,13 @@ public class DashboardProvider implements IResourceProvider {
         return null;
     }
 
-    private String getRiskLevel(int news2Score) {
-        if (news2Score >= 7) return "HIGH";
-        if (news2Score >= 5) return "MEDIUM";
-        return "LOW";
+    private int extractNews2Score(Patient patient) {
+        Extension ext = patient.getExtensionByUrl("http://news2-score");
+        if (ext != null && ext.getValue() instanceof IntegerType) {
+            Integer v = ((IntegerType) ext.getValue()).getValue();
+            return v != null ? v : 0;
+        }
+        return 0;
     }
 
     private void writeJsonResponse(HttpServletResponse response, DashboardStats stats) throws Exception {
@@ -353,4 +371,5 @@ public class DashboardProvider implements IResourceProvider {
         String unit;
         int sampleCount;
     }
+
 }
