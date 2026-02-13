@@ -10,15 +10,22 @@ import org.hl7.fhir.r4.model.Extension;
 import org.hl7.fhir.r4.model.Observation;
 import org.hl7.fhir.r4.model.Patient;
 import org.hl7.fhir.r4.model.Reference;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 import ca.uhn.fhir.context.FhirContext;
 import ca.uhn.fhir.rest.client.api.IGenericClient;
 import ca.uhn.fhir.rest.client.interceptor.SimpleRequestHeaderInterceptor;
+import ca.uhn.fhir.rest.server.exceptions.ResourceVersionConflictException;
 
 @Component
 public class UpstreamForwarder {
+    private static final Logger ourLog = LoggerFactory.getLogger(UpstreamForwarder.class);
+    private static final int PATIENT_BATCH_SIZE = 20;
+    private static final int PATIENT_RETRY_ATTEMPTS = 3;
+
     @Value("${hapi.fhir.location.block:North}")
     private String blockValue;
     
@@ -83,30 +90,98 @@ public class UpstreamForwarder {
 
     public void upsertPatients(List<Patient> patients) {
         if (patients == null || patients.isEmpty()) return;
-        try {
-            Bundle tx = new Bundle().setType(Bundle.BundleType.TRANSACTION);
-            for (Patient p : patients) {
-                Bundle.BundleEntryComponent e = tx.addEntry().setResource(p);
-                String id = p.getIdElement().getIdPart();
-                // Use conditional PUT to update existing or create new patient
-                // Try to match by identifier first, then by ID
-                if (p.hasIdentifier() && p.getIdentifierFirstRep().hasSystem() && p.getIdentifierFirstRep().hasValue()) {
-                    String system = p.getIdentifierFirstRep().getSystem();
-                    String value = p.getIdentifierFirstRep().getValue();
-                    e.getRequest().setMethod(Bundle.HTTPVerb.PUT)
-                        .setUrl("Patient?identifier=" + system + "|" + value);
+        int total = patients.size();
+        int successCount = 0;
+
+        for (int i = 0; i < total; i += PATIENT_BATCH_SIZE) {
+            int toIndex = Math.min(i + PATIENT_BATCH_SIZE, total);
+            List<Patient> batch = patients.subList(i, toIndex);
+
+            try {
+                Bundle tx = new Bundle().setType(Bundle.BundleType.TRANSACTION);
+                for (Patient p : batch) {
+                    Bundle.BundleEntryComponent e = tx.addEntry().setResource(p);
+                    applyPatientUpsertRequest(e, p);
+                }
+                client.transaction().withBundle(tx).execute();
+                successCount += batch.size();
+            } catch (Exception e) {
+                if (isVersionConflict(e)) {
+                    ourLog.warn("Version conflict forwarding patient batch (size {}). Retrying one-by-one.", batch.size());
+                    successCount += retryPatientsIndividually(batch);
                 } else {
-                    // Fall back to ID-based update, but use conditional to avoid errors if patient doesn't exist
-                    e.getRequest().setMethod(Bundle.HTTPVerb.PUT)
-                        .setUrl(id != null ? "Patient/" + id : "Patient");
+                    ourLog.error("Failed forwarding patient batch of size {}", batch.size(), e);
                 }
             }
-            client.transaction().withBundle(tx).execute();
-        } catch (Exception e) {
-            System.err.println("ERROR forwarding patients: " + e.getMessage());
-            e.printStackTrace();
-            throw new RuntimeException("Failed to forward patients", e);
         }
+
+        if (successCount < total) {
+            ourLog.warn("Forwarded {}/{} patients upstream (some failed due to concurrent updates).", successCount, total);
+        } else {
+            ourLog.info("Forwarded {}/{} patients upstream.", successCount, total);
+        }
+    }
+
+    private void applyPatientUpsertRequest(Bundle.BundleEntryComponent entry, Patient p) {
+        String id = p.getIdElement().getIdPart();
+
+        if (p.hasIdentifier() && p.getIdentifierFirstRep().hasSystem() && p.getIdentifierFirstRep().hasValue()) {
+            String system = p.getIdentifierFirstRep().getSystem();
+            String value = p.getIdentifierFirstRep().getValue();
+            entry.getRequest().setMethod(Bundle.HTTPVerb.PUT)
+                    .setUrl("Patient?identifier=" + system + "|" + value);
+        } else {
+            entry.getRequest().setMethod(Bundle.HTTPVerb.PUT)
+                    .setUrl(id != null ? "Patient/" + id : "Patient");
+        }
+    }
+
+    private int retryPatientsIndividually(List<Patient> batch) {
+        int successes = 0;
+
+        for (Patient p : batch) {
+            boolean done = false;
+
+            for (int attempt = 1; attempt <= PATIENT_RETRY_ATTEMPTS && !done; attempt++) {
+                try {
+                    Bundle tx = new Bundle().setType(Bundle.BundleType.TRANSACTION);
+                    Bundle.BundleEntryComponent e = tx.addEntry().setResource(p);
+                    applyPatientUpsertRequest(e, p);
+                    client.transaction().withBundle(tx).execute();
+                    successes++;
+                    done = true;
+                } catch (Exception e) {
+                    if (isVersionConflict(e) && attempt < PATIENT_RETRY_ATTEMPTS) {
+                        try {
+                            Thread.sleep(75L * attempt);
+                        } catch (InterruptedException interruptedException) {
+                            Thread.currentThread().interrupt();
+                            return successes;
+                        }
+                    } else {
+                        String patientId = p.getIdElement().getIdPart();
+                        ourLog.warn("Skipping patient {} after {} attempt(s): {}",
+                                patientId,
+                                attempt,
+                                e.getMessage());
+                        done = true;
+                    }
+                }
+            }
+        }
+
+        return successes;
+    }
+
+    private boolean isVersionConflict(Throwable t) {
+        Throwable current = t;
+        while (current != null) {
+            if (current instanceof ResourceVersionConflictException) {
+                return true;
+            }
+            current = current.getCause();
+        }
+        return false;
     }
 
     /**

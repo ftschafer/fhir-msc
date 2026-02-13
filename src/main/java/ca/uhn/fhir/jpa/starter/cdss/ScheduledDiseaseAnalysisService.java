@@ -311,11 +311,89 @@ public class ScheduledDiseaseAnalysisService {
         searchMap.setLoadSynchronous(true);
 
         IBundleProvider results = observationDao.search(searchMap);
-        
-        return results.getAllResources().stream()
+
+        List<Observation> observations = results.getAllResources().stream()
             .filter(r -> r instanceof Observation)
             .map(r -> (Observation) r)
             .collect(Collectors.toList());
+
+        if (!observations.isEmpty()) {
+            return observations;
+        }
+
+        // Fallback 1: some feeds do not set category=vital-signs correctly
+        SearchParameterMap fallbackByDate = new SearchParameterMap();
+        fallbackByDate.add("patient", new ReferenceParam(patientId));
+        fallbackByDate.add("date", new ca.uhn.fhir.rest.param.DateRangeParam(oneDayAgo, null));
+        fallbackByDate.setLoadSynchronous(true);
+
+        List<Observation> byDateNoCategory = observationDao.search(fallbackByDate)
+                .getAllResources().stream()
+                .filter(r -> r instanceof Observation)
+                .map(r -> (Observation) r)
+                .filter(this::isRelevantVitalSign)
+                .collect(Collectors.toList());
+
+        if (!byDateNoCategory.isEmpty()) {
+            logger.info("Patient {}: no category=vital-signs in last 24h; using {} fallback observations by LOINC code",
+                    patientId,
+                    byDateNoCategory.size());
+            return byDateNoCategory;
+        }
+
+        // Fallback 2: historical datasets (effectiveDateTime older than 24h)
+        SearchParameterMap fallbackAll = new SearchParameterMap();
+        fallbackAll.add("patient", new ReferenceParam(patientId));
+        fallbackAll.setLoadSynchronous(true);
+
+        List<Observation> historical = observationDao.search(fallbackAll)
+                .getAllResources().stream()
+                .filter(r -> r instanceof Observation)
+                .map(r -> (Observation) r)
+                .filter(this::isRelevantVitalSign)
+                .collect(Collectors.toList());
+
+        if (!historical.isEmpty()) {
+            logger.info("Patient {}: no recent vitals in 24h; using {} historical observations",
+                    patientId,
+                    historical.size());
+        }
+
+        return historical;
+    }
+
+    private boolean isRelevantVitalSign(Observation obs) {
+        if (!obs.hasCode() || !obs.getCode().hasCoding()) {
+            return false;
+        }
+
+        // Exclude aggregate observations from CDSS signal input
+        boolean isAverageCategory = obs.getCategory().stream()
+                .flatMap(cat -> cat.getCoding().stream())
+                .anyMatch(c -> "vital-signs-average".equals(c.getCode()));
+        if (isAverageCategory) {
+            return false;
+        }
+
+        boolean hasStatisticsAverageExtension = obs.getExtension().stream()
+                .anyMatch(ext -> "http://hl7.org/fhir/StructureDefinition/observation-statisticsCode".equals(ext.getUrl()));
+        if (hasStatisticsAverageExtension) {
+            return false;
+        }
+
+        if (!obs.hasSubject() || !obs.getSubject().hasReference() || !obs.getSubject().getReference().startsWith("Patient/")) {
+            return false;
+        }
+
+        return obs.getCode().getCoding().stream().anyMatch(coding -> {
+            String code = coding.getCode();
+            return "8867-4".equals(code)
+                    || "8480-6".equals(code)
+                    || "8462-4".equals(code)
+                    || "9279-1".equals(code)
+                    || "8310-5".equals(code)
+                    || "59408-5".equals(code);
+        });
     }
 
     /**

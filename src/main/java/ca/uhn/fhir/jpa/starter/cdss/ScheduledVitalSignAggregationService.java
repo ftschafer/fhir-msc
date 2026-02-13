@@ -63,8 +63,8 @@ public class ScheduledVitalSignAggregationService {
         put("59408-5", "Oxygen saturation");
     }};
 
-    // Run every 5 minutes (300000 ms), initial delay 20 seconds
-    @Scheduled(fixedDelay = 800, initialDelay = 800)
+    // Run every 3 seconds for testing
+    @Scheduled(fixedDelay = 3000, initialDelay = 3000)
     public void calculateAndForwardAverages() {
         logger.info("========================================");
         logger.info("VITAL SIGN AGGREGATION - Starting");
@@ -181,11 +181,77 @@ public class ScheduledVitalSignAggregationService {
         searchMap.setLoadSynchronous(true);
 
         IBundleProvider results = observationDao.search(searchMap);
-        
-        return results.getAllResources().stream()
+
+        List<Observation> observations = results.getAllResources().stream()
             .filter(r -> r instanceof Observation)
             .map(r -> (Observation) r)
             .collect(Collectors.toList());
+
+        if (!observations.isEmpty()) {
+            return observations;
+        }
+
+        // Fallback 1: category may be missing/misaligned in incoming source observations
+        SearchParameterMap fallbackByDate = new SearchParameterMap();
+        fallbackByDate.add("date", new DateRangeParam(fiveMinutesAgo, null));
+        fallbackByDate.setLoadSynchronous(true);
+
+        List<Observation> byDateNoCategory = observationDao.search(fallbackByDate)
+            .getAllResources().stream()
+            .filter(r -> r instanceof Observation)
+            .map(r -> (Observation) r)
+            .filter(this::isRelevantVitalSign)
+            .collect(Collectors.toList());
+
+        if (!byDateNoCategory.isEmpty()) {
+            logger.info("No category=vital-signs in last 5 minutes; using {} fallback observations by LOINC code",
+                byDateNoCategory.size());
+            return byDateNoCategory;
+        }
+
+        // Fallback 2: historical payloads (effectiveDateTime older than now-window)
+        SearchParameterMap fallbackAll = new SearchParameterMap();
+        fallbackAll.setLoadSynchronous(true);
+
+        List<Observation> historical = observationDao.search(fallbackAll)
+            .getAllResources().stream()
+            .filter(r -> r instanceof Observation)
+            .map(r -> (Observation) r)
+            .filter(this::isRelevantVitalSign)
+            .collect(Collectors.toList());
+
+        if (!historical.isEmpty()) {
+            logger.info("No recent vital signs in 5 minutes; using {} historical observations", historical.size());
+        }
+
+        return historical;
+    }
+
+    private boolean isRelevantVitalSign(Observation obs) {
+        if (!obs.hasCode() || !obs.getCode().hasCoding()) {
+            return false;
+        }
+
+        // Never use already-aggregated observations as source input
+        boolean isAverageCategory = obs.getCategory().stream()
+            .flatMap(cat -> cat.getCoding().stream())
+            .anyMatch(c -> "vital-signs-average".equals(c.getCode()));
+        if (isAverageCategory) {
+            return false;
+        }
+
+        boolean hasStatisticsAverageExtension = obs.getExtension().stream()
+            .anyMatch(ext -> "http://hl7.org/fhir/StructureDefinition/observation-statisticsCode".equals(ext.getUrl()));
+        if (hasStatisticsAverageExtension) {
+            return false;
+        }
+
+        // Source vitals must belong to a patient
+        if (!obs.hasSubject() || !obs.getSubject().hasReference() || !obs.getSubject().getReference().startsWith("Patient/")) {
+            return false;
+        }
+
+        return obs.getCode().getCoding().stream().anyMatch(coding -> VITAL_SIGN_CODES.containsKey(coding.getCode()));
     }
 
     /**
@@ -215,9 +281,10 @@ public class ScheduledVitalSignAggregationService {
         Map<String, Observation> latest = new HashMap<>();
 
         for (Observation obs : observations) {
-            String patientKey = obs.hasSubject() && obs.getSubject().hasReference()
-                ? obs.getSubject().getReference()
-                : "Unknown";
+            if (!obs.hasSubject() || !obs.getSubject().hasReference() || !obs.getSubject().getReference().startsWith("Patient/")) {
+                continue;
+            }
+            String patientKey = obs.getSubject().getReference();
 
             Observation current = latest.get(patientKey);
             if (current == null || isNewerObservation(obs, current)) {

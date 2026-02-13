@@ -10,6 +10,7 @@ import org.hl7.fhir.r4.model.StringType;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 import ca.uhn.fhir.jpa.starter.cdss.VitalSignHistoryService;
@@ -32,6 +33,9 @@ public class VitalSignHistoryProvider implements IResourceProvider {
     @Autowired
     private VitalSignHistoryService historyService;
 
+    @Value("${hapi.fhir.location.block:Block-Default}")
+    private String currentBlock;
+
     @Override
     public Class<? extends IBaseResource> getResourceType() {
         return Observation.class;
@@ -45,7 +49,7 @@ public class VitalSignHistoryProvider implements IResourceProvider {
             HttpServletResponse response) {
         
         try {
-            String block = blockParam != null ? blockParam.getValue() : "Block-Default";
+            String block = (blockParam != null && blockParam.hasValue()) ? blockParam.getValue() : currentBlock;
             int days = daysParam != null ? parseInt(daysParam.getValue(), 30) : 30;
             
             logger.info("$vital-history called: block={}, days={}", block, days);

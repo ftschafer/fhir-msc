@@ -5,6 +5,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
 import java.util.stream.Collectors;
 
 import org.hl7.fhir.instance.model.api.IBaseResource;
@@ -43,7 +44,7 @@ public class DashboardProvider implements IResourceProvider {
     // Cache results for 30 seconds
     private DashboardStats cachedStats;
     private long cacheTimestamp = 0;
-    private static final long CACHE_DURATION_MS = 30000;
+    private static final long CACHE_DURATION_MS = 3000;
 
     public DashboardProvider(DaoRegistry daoRegistry) {
         this.daoRegistry = daoRegistry;
@@ -122,19 +123,26 @@ public class DashboardProvider implements IResourceProvider {
             }
             
             // Get location
-            String location = "Unknown";
+            String location = currentBlock;
             Extension locationExt = patient.getExtensionByUrl("http://patient-location");
             if (locationExt != null) {
                 Extension blockExt = locationExt.getExtension().stream()
                     .filter(e -> "block".equals(e.getUrl()))
                     .findFirst().orElse(null);
                 if (blockExt != null && blockExt.getValue() instanceof StringType) {
-                    location = ((StringType) blockExt.getValue()).getValue();
+                    String block = ((StringType) blockExt.getValue()).getValue();
+                    if (block != null && !block.isBlank()) {
+                        location = block;
+                    }
                 }
+            }
+
+            if (location == null || location.isBlank()) {
+                location = "Unknown";
             }
             
             // Filter by block if specified
-            if (filterBlock != null && !filterBlock.isEmpty() && !location.equals(filterBlock)) {
+            if (filterBlock != null && !filterBlock.isEmpty() && !Objects.equals(location.trim().toLowerCase(Locale.ROOT), filterBlock.trim().toLowerCase(Locale.ROOT))) {
                 continue; // Skip patients not in the requested block
             }
             

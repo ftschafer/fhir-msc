@@ -69,8 +69,8 @@ public class VitalSignAggregationService {
         }
     }
 
-    // Run every 5 minutes (300000 ms), initial delay 5 seconds
-    @Scheduled(fixedDelay = 300000, initialDelay = 5000)
+    // Run every 3 seconds for testing
+    @Scheduled(fixedDelay = 3000, initialDelay = 3000)
     public void calculateAndForwardAverages() {
         logger.info("========================================");
         logger.info("VITAL SIGN AGGREGATION - Starting");
@@ -216,9 +216,10 @@ public class VitalSignAggregationService {
         Map<String, Observation> latest = new HashMap<>();
 
         for (Observation obs : observations) {
-            String patientKey = obs.hasSubject() && obs.getSubject().hasReference()
-                ? obs.getSubject().getReference()
-                : "Unknown";
+            if (!obs.hasSubject() || !obs.getSubject().hasReference() || !obs.getSubject().getReference().startsWith("Patient/")) {
+                continue;
+            }
+            String patientKey = obs.getSubject().getReference();
 
             Observation current = latest.get(patientKey);
             if (current == null || isNewerObservation(obs, current)) {

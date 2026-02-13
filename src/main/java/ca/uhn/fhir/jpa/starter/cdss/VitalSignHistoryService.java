@@ -35,16 +35,24 @@ public class VitalSignHistoryService {
         put("59408-5", "Oxygen saturation");
     }};
 
+    private String normalizeBlockName(String blockName) {
+        if (blockName == null) {
+            return "";
+        }
+        return blockName.trim().toLowerCase(Locale.ROOT);
+    }
+
     /**
      * Add a new data point to the history
      */
     public void addDataPoint(String blockName, String vitalSignCode, double averageValue, int sampleCount) {
+        String normalizedBlock = normalizeBlockName(blockName);
         logger.info("Adding data point: block={}, code={}, value={}, samples={}", 
-                   blockName, vitalSignCode, averageValue, sampleCount);
+                   normalizedBlock, vitalSignCode, averageValue, sampleCount);
         
         // Get or create block map
         Map<String, List<HistoricalDataPoint>> blockHistory = historyStore.computeIfAbsent(
-            blockName, 
+            normalizedBlock, 
             k -> new ConcurrentHashMap<>()
         );
         
@@ -84,7 +92,7 @@ public class VitalSignHistoryService {
      * Get historical data for a specific block and vital sign
      */
     public List<HistoricalDataPoint> getHistory(String blockName, String vitalSignCode) {
-        Map<String, List<HistoricalDataPoint>> blockHistory = historyStore.get(blockName);
+        Map<String, List<HistoricalDataPoint>> blockHistory = historyStore.get(normalizeBlockName(blockName));
         if (blockHistory == null) {
             return Collections.emptyList();
         }
@@ -104,7 +112,7 @@ public class VitalSignHistoryService {
      * Get all historical data for a block (all vital signs)
      */
     public Map<String, List<HistoricalDataPoint>> getAllHistory(String blockName) {
-        Map<String, List<HistoricalDataPoint>> blockHistory = historyStore.get(blockName);
+        Map<String, List<HistoricalDataPoint>> blockHistory = historyStore.get(normalizeBlockName(blockName));
         if (blockHistory == null) {
             return Collections.emptyMap();
         }
@@ -223,7 +231,7 @@ public class VitalSignHistoryService {
      * Clear history for a specific block
      */
     public void clearBlockHistory(String blockName) {
-        historyStore.remove(blockName);
+        historyStore.remove(normalizeBlockName(blockName));
     }
 
     /**
