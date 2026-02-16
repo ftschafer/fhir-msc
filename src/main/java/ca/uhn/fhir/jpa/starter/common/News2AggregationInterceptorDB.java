@@ -30,6 +30,7 @@ public class News2AggregationInterceptorDB {
     private static final Logger logger = LoggerFactory.getLogger(News2AggregationInterceptorDB.class);
 
     private static final String TX_OBS_KEY = News2AggregationInterceptorDB.class.getName() + ".OBS_SET";
+    private static final String INTERNAL_REQUEST_HEADER = "X-Internal-Request";
 
     // Use the same extension URL as PatientTotalNews2ScoreInterceptor
     private static final String NEWS2_EXTENSION_URL = "http://news2-score";
@@ -45,6 +46,7 @@ public class News2AggregationInterceptorDB {
     // Collect created Observation instances (make copies so they are safe to use after commit).
     @Hook(Pointcut.STORAGE_PRECOMMIT_RESOURCE_CREATED)
     public void onObservationCreated(IBaseResource resource, RequestDetails requestDetails, TransactionDetails tx) {
+        if (isInternalRequest(requestDetails)) return;
         if (!(resource instanceof Observation)) return;
         Observation obs = (Observation) resource;
 
@@ -81,6 +83,7 @@ public class News2AggregationInterceptorDB {
     // After transaction processed, hand collected observations to the aggregation service asynchronously.
     @Hook(Pointcut.STORAGE_TRANSACTION_PROCESSED)
     public void onTransactionProcessed(RequestDetails requestDetails, TransactionDetails tx) {
+        if (isInternalRequest(requestDetails)) return;
         @SuppressWarnings("unchecked")
         Set<Observation> set = (Set<Observation>) tx.getUserData(TX_OBS_KEY);
         tx.putUserData(TX_OBS_KEY, null); // Remove the key after retrieving
@@ -95,5 +98,11 @@ public class News2AggregationInterceptorDB {
                 logger.error("News2 aggregation failed", e);
             }
         });
+    }
+
+    private boolean isInternalRequest(RequestDetails requestDetails) {
+        if (requestDetails == null) return false;
+        String val = requestDetails.getHeader(INTERNAL_REQUEST_HEADER);
+        return val != null && "true".equalsIgnoreCase(val);
     }
 }

@@ -413,8 +413,7 @@ public class StarterJpaConfig {
 		corsInterceptor.ifPresent(fhirServer::registerInterceptor);
 
 		if (!subscriptionSettings.getSupportedSubscriptionTypes().isEmpty()) {
-			// Subscription debug logging
-			fhirServer.registerInterceptor(new SubscriptionDebugLogInterceptor());
+			// Subscription debug logging intentionally disabled to avoid excessive per-resource INFO logs.
 		}
 
 		if (appProperties.getAllow_cascading_deletes()) {

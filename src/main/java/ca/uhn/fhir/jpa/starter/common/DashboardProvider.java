@@ -9,6 +9,7 @@ import java.util.Map;
 import org.hl7.fhir.instance.model.api.IBaseResource;
 import org.hl7.fhir.r4.model.Condition;
 import org.hl7.fhir.r4.model.Extension;
+import org.hl7.fhir.r4.model.Identifier;
 import org.hl7.fhir.r4.model.IntegerType;
 import org.hl7.fhir.r4.model.Observation;
 import org.hl7.fhir.r4.model.Patient;
@@ -154,22 +155,25 @@ public class DashboardProvider implements IResourceProvider {
         conditionSearch.setLoadSynchronous(true);
         IBundleProvider conditionResults = conditionDao.search(conditionSearch);
         List<IBaseResource> conditions = conditionResults.getAllResources();
-        
-        stats.totalConditions = conditions.size();
+
+        int totalConditionsForBlocks = 0;
         for (IBaseResource res : conditions) {
             Condition c = (Condition) res;
-            String patientRef = c.getSubject() != null ? c.getSubject().getReference() : null;
-            if (patientRef != null && patientRef.startsWith("Patient/")) {
-                String patientId = patientRef.substring("Patient/".length());
+            String patientId = c.getSubject() != null
+                ? c.getSubject().getReferenceElement().getIdPart()
+                : null;
+            if (patientId != null && !patientId.isBlank()) {
                 String block = patientBlockMap.get(patientId);
                 if (block != null) {
                     BlockStats bs = blockStatsMap.get(block);
                     if (bs != null) {
                         bs.conditionCount++;
+                        totalConditionsForBlocks++;
                     }
                 }
             }
         }
+        stats.totalConditions = totalConditionsForBlocks;
         
         // Get vital sign averages grouped by block
         IFhirResourceDao<Observation> observationDao = daoRegistry.getResourceDao(Observation.class);
@@ -221,10 +225,21 @@ public class DashboardProvider implements IResourceProvider {
             Extension blockExt = locExt.getExtension().stream()
                 .filter(e -> "block".equals(e.getUrl()))
                 .findFirst().orElse(null);
-            if (blockExt != null && blockExt.getValue() instanceof StringType) {
-                return ((StringType) blockExt.getValue()).getValue();
+            if (blockExt != null && blockExt.getValue() != null) {
+                return normalize(blockExt.getValue().primitiveValue());
             }
         }
+
+        // Fallback: infer block from scoped identifier "<neighborhood>-<block>-<resourceId>"
+        // system: urn:patient:neigh-block-scope
+        String fromIdentifier = extractBlockFromScopedIdentifier(
+            patient.getIdentifier(),
+            "urn:patient:neigh-block-scope"
+        );
+        if (fromIdentifier != null) {
+            return fromIdentifier;
+        }
+
         return null;
     }
 
@@ -235,7 +250,7 @@ public class DashboardProvider implements IResourceProvider {
                 if ("neighborhood".equals(nested.getUrl()) && nested.getValue() instanceof StringType) {
                     String v = ((StringType) nested.getValue()).getValue();
                     if (v != null && !v.isBlank()) {
-                        return v;
+                        return normalize(v);
                     }
                 }
             }
@@ -249,11 +264,49 @@ public class DashboardProvider implements IResourceProvider {
             Extension blockExt = locExt.getExtension().stream()
                 .filter(e -> "block".equals(e.getUrl()))
                 .findFirst().orElse(null);
-            if (blockExt != null && blockExt.getValue() instanceof StringType) {
-                return ((StringType) blockExt.getValue()).getValue();
+            if (blockExt != null && blockExt.getValue() != null) {
+                return normalize(blockExt.getValue().primitiveValue());
+            }
+        }
+
+        // Fallback: infer block from scoped identifier "<neighborhood>-<block>-<resourceId>"
+        // system: urn:observation:neigh-block-scope
+        String fromIdentifier = extractBlockFromScopedIdentifier(
+            obs.getIdentifier(),
+            "urn:observation:neigh-block-scope"
+        );
+        if (fromIdentifier != null) {
+            return fromIdentifier;
+        }
+
+        return null;
+    }
+
+    private String extractBlockFromScopedIdentifier(List<Identifier> identifiers, String system) {
+        if (identifiers == null || identifiers.isEmpty()) {
+            return null;
+        }
+        for (Identifier id : identifiers) {
+            if (id == null || id.getValue() == null) {
+                continue;
+            }
+            if (system.equals(id.getSystem())) {
+                String value = id.getValue();
+                // expected: <neighborhood>-<block>-<resourceId>
+                int first = value.indexOf('-');
+                int second = value.indexOf('-', first + 1);
+                if (first > 0 && second > first + 1) {
+                    return normalize(value.substring(first + 1, second));
+                }
             }
         }
         return null;
+    }
+
+    private String normalize(String s) {
+        if (s == null) return null;
+        String trimmed = s.trim();
+        return trimmed.isEmpty() ? null : trimmed;
     }
 
     private int extractNews2Score(Patient patient) {

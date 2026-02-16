@@ -4,6 +4,7 @@ import ca.uhn.fhir.context.FhirContext;
 import ca.uhn.fhir.rest.client.api.IGenericClient;
 import ca.uhn.fhir.rest.client.interceptor.SimpleRequestHeaderInterceptor;
 import org.hl7.fhir.r4.model.Bundle;
+import org.hl7.fhir.r4.model.Identifier;
 import org.hl7.fhir.r4.model.Observation;
 import org.hl7.fhir.r4.model.Patient;
 import org.springframework.beans.factory.annotation.Value;
@@ -36,16 +37,16 @@ public class UpstreamForwarder {
                 // Extract block from observation location extension
                 String block = extractBlock(o);
                 if (block == null || block.isBlank()) continue;
-                String scopedId = buildScopedId(neighborhood, block, o.getIdElement().getIdPart());
+                String resourceId = o.getIdElement() != null ? o.getIdElement().getIdPart() : null;
+                if (resourceId == null || resourceId.isBlank()) continue;
+                String scopedId = buildScopedId(neighborhood, block, resourceId);
                 
                 // Add identifier for block-scoped tracking
-                o.addIdentifier()
-                    .setSystem("urn:observation:neigh-block-scope")
-                    .setValue(scopedId);
+                upsertIdentifier(o, "urn:observation:neigh-block-scope", scopedId);
                 
                 Bundle.BundleEntryComponent e = tx.addEntry().setResource(o);
                 e.getRequest().setMethod(Bundle.HTTPVerb.PUT)
-                    .setUrl("Observation?identifier=urn:observation:neigh-block-scope|" + scopedId);
+                    .setUrl("Observation/" + resourceId);
             }
             client.transaction().withBundle(tx).execute();
         } catch (Exception ignored) { }
@@ -60,16 +61,16 @@ public class UpstreamForwarder {
                 // Extract block from patient location extension
                 String block = extractBlock(p);
                 if (block == null || block.isBlank()) continue;
-                String scopedId = buildScopedId(neighborhood, block, p.getIdElement().getIdPart());
+                String resourceId = p.getIdElement() != null ? p.getIdElement().getIdPart() : null;
+                if (resourceId == null || resourceId.isBlank()) continue;
+                String scopedId = buildScopedId(neighborhood, block, resourceId);
                 
                 // Add identifier for block-scoped tracking
-                p.addIdentifier()
-                    .setSystem("urn:patient:neigh-block-scope")
-                    .setValue(scopedId);
+                upsertIdentifier(p, "urn:patient:neigh-block-scope", scopedId);
                 
                 Bundle.BundleEntryComponent e = tx.addEntry().setResource(p);
                 e.getRequest().setMethod(Bundle.HTTPVerb.PUT)
-                    .setUrl("Patient?identifier=urn:patient:neigh-block-scope|" + scopedId);
+                    .setUrl("Patient/" + resourceId);
             }
             client.transaction().withBundle(tx).execute();
         } catch (Exception ignored) { }
@@ -121,6 +122,18 @@ public class UpstreamForwarder {
             locExt.addExtension(new org.hl7.fhir.r4.model.Extension()
                 .setUrl(NEIGH_URL)
                 .setValue(new org.hl7.fhir.r4.model.StringType(neighborhood)));
+        }
+    }
+
+    private void upsertIdentifier(org.hl7.fhir.r4.model.DomainResource resource, String system, String value) {
+        Identifier existing = resource.getIdentifier().stream()
+            .filter(i -> system.equals(i.getSystem()))
+            .findFirst()
+            .orElse(null);
+        if (existing != null) {
+            existing.setValue(value);
+        } else {
+            resource.addIdentifier().setSystem(system).setValue(value);
         }
     }
 }
