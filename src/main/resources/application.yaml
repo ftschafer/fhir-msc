@@ -208,7 +208,8 @@ hapi:
     #    allow_external_references: true
     #    allow_multiple_delete: true
     #    allow_override_default_search_params: true
-    #    auto_create_placeholder_reference_targets: false
+    auto_create_placeholder_reference_targets: true
+    client_id_strategy: ANY
     #    mass_ingestion_mode_enabled: false
     ### tells the server to automatically append the current version of the target resource to references at these paths
     #    auto_version_reference_at_paths: Device.patient, Device.location, Device.parent, DeviceMetric.parent, DeviceMetric.source, Observation.device, Observation.subject
@@ -249,7 +250,7 @@ hapi:
     mdm_enabled: false
     mdm_rules_json_location: "mdm-rules.json"
     ##  see: https://hapifhir.io/hapi-fhir/docs/interceptors/built_in_server_interceptors.html#jpa-server-retry-on-version-conflicts
-    #    userRequestRetryVersionConflictsInterceptorEnabled : false
+    userRequestRetryVersionConflictsInterceptorEnabled: true
     #    local_base_urls:
     #      - https://hapi.fhir.org/baseR4
     #    pre_expand_value_sets: true
@@ -405,3 +406,8 @@ hapi:
 upstream:
   fhir:
     base-url: http://localhost:8091/fhir
+
+logging:
+  level:
+    ca.uhn.fhir.jpa.subscription: WARN
+    fhirtest.access: WARN

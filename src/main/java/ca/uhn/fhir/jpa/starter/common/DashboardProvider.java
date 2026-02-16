@@ -99,7 +99,7 @@ public class DashboardProvider implements IResourceProvider {
         SearchParameterMap patientSearch = new SearchParameterMap();
         patientSearch.setLoadSynchronous(true);
         IBundleProvider patientResults = patientDao.search(patientSearch);
-        List<IBaseResource> patients = patientResults.getAllResources();
+        List<IBaseResource> patients = getAllResources(patientResults);
 
         Map<String, String> patientBlockMap = new HashMap<>();
         Map<String, String> blockNeighborhoodMap = new HashMap<>();
@@ -148,28 +148,38 @@ public class DashboardProvider implements IResourceProvider {
             ns.patientCount += 1;
         }
         
-        // Get active conditions grouped by block
+        // Get conditions grouped by block (active only, evaluated in-code for robustness)
         IFhirResourceDao<Condition> conditionDao = daoRegistry.getResourceDao(Condition.class);
         SearchParameterMap conditionSearch = new SearchParameterMap();
-        conditionSearch.add("clinical-status", new TokenParam("http://terminology.hl7.org/CodeSystem/condition-clinical", "active"));
         conditionSearch.setLoadSynchronous(true);
         IBundleProvider conditionResults = conditionDao.search(conditionSearch);
-        List<IBaseResource> conditions = conditionResults.getAllResources();
+        List<IBaseResource> conditions = getAllResources(conditionResults);
 
         int totalConditionsForBlocks = 0;
         for (IBaseResource res : conditions) {
             Condition c = (Condition) res;
-            String patientId = c.getSubject() != null
-                ? c.getSubject().getReferenceElement().getIdPart()
-                : null;
-            if (patientId != null && !patientId.isBlank()) {
-                String block = patientBlockMap.get(patientId);
-                if (block != null) {
-                    BlockStats bs = blockStatsMap.get(block);
-                    if (bs != null) {
-                        bs.conditionCount++;
-                        totalConditionsForBlocks++;
-                    }
+            if (!isActiveCondition(c)) {
+                continue;
+            }
+
+            String block = extractBlock(c);
+            if (block == null || block.isBlank()) {
+                String patientId = c.getSubject() != null
+                    ? c.getSubject().getReferenceElement().getIdPart()
+                    : null;
+                if (patientId != null && !patientId.isBlank()) {
+                    block = patientBlockMap.get(patientId);
+                }
+            }
+
+            if (block != null && !block.isBlank()) {
+                if (filterBlock != null && !filterBlock.isEmpty() && !filterBlock.equals(block)) {
+                    continue;
+                }
+                BlockStats bs = blockStatsMap.get(block);
+                if (bs != null) {
+                    bs.conditionCount++;
+                    totalConditionsForBlocks++;
                 }
             }
         }
@@ -181,7 +191,7 @@ public class DashboardProvider implements IResourceProvider {
         avgSearch.add("category", new TokenParam("http://terminology.hl7.org/CodeSystem/observation-category", "vital-signs-average"));
         avgSearch.setLoadSynchronous(true);
         IBundleProvider avgResults = observationDao.search(avgSearch);
-        List<IBaseResource> averages = avgResults.getAllResources();
+        List<IBaseResource> averages = getAllResources(avgResults);
         
         for (IBaseResource res : averages) {
             Observation obs = (Observation) res;
@@ -238,6 +248,12 @@ public class DashboardProvider implements IResourceProvider {
         );
         if (fromIdentifier != null) {
             return fromIdentifier;
+        }
+
+        // Final fallback: infer block from patient id prefix like "b72-p5" -> "B72"
+        String fromPatientId = extractBlockFromResourceId(patient.getIdElement().getIdPart());
+        if (fromPatientId != null) {
+            return fromPatientId;
         }
 
         return null;
@@ -309,6 +325,60 @@ public class DashboardProvider implements IResourceProvider {
         return trimmed.isEmpty() ? null : trimmed;
     }
 
+    private String extractBlockFromResourceId(String resourceId) {
+        String id = normalize(resourceId);
+        if (id == null) {
+            return null;
+        }
+
+        int dash = id.indexOf('-');
+        if (dash <= 1) {
+            return null;
+        }
+
+        String prefix = id.substring(0, dash);
+        if (prefix.length() < 2) {
+            return null;
+        }
+
+        char first = prefix.charAt(0);
+        if (first != 'b' && first != 'B') {
+            return null;
+        }
+
+        String number = prefix.substring(1);
+        for (int i = 0; i < number.length(); i++) {
+            if (!Character.isDigit(number.charAt(i))) {
+                return null;
+            }
+        }
+
+        return "B" + number;
+    }
+
+    private List<IBaseResource> getAllResources(IBundleProvider provider) {
+        if (provider == null) {
+            return List.of();
+        }
+
+        Integer size = provider.size();
+        if (size == null || size < 0) {
+            return provider.getAllResources();
+        }
+
+        List<IBaseResource> all = new ArrayList<>(size);
+        final int pageSize = 500;
+        for (int from = 0; from < size; from += pageSize) {
+            int to = Math.min(from + pageSize, size);
+            List<IBaseResource> page = provider.getResources(from, to);
+            if (page.isEmpty()) {
+                break;
+            }
+            all.addAll(page);
+        }
+        return all;
+    }
+
     private int extractNews2Score(Patient patient) {
         Extension ext = patient.getExtensionByUrl("http://news2-score");
         if (ext != null && ext.getValue() instanceof IntegerType) {
@@ -316,6 +386,27 @@ public class DashboardProvider implements IResourceProvider {
             return v != null ? v : 0;
         }
         return 0;
+    }
+
+    private boolean isActiveCondition(Condition condition) {
+        if (condition == null || !condition.hasClinicalStatus()) {
+            return false;
+        }
+        return condition.getClinicalStatus().getCoding().stream()
+            .anyMatch(c -> c != null && c.getCode() != null && "active".equalsIgnoreCase(c.getCode()));
+    }
+
+    private String extractBlock(Condition condition) {
+        Extension locExt = condition.getExtensionByUrl("http://patient-location");
+        if (locExt != null) {
+            Extension blockExt = locExt.getExtension().stream()
+                .filter(e -> "block".equals(e.getUrl()))
+                .findFirst().orElse(null);
+            if (blockExt != null && blockExt.getValue() != null) {
+                return normalize(blockExt.getValue().primitiveValue());
+            }
+        }
+        return null;
     }
 
     private void writeJsonResponse(HttpServletResponse response, DashboardStats stats) throws Exception {
