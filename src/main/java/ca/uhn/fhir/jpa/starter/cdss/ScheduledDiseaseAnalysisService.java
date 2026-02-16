@@ -273,12 +273,19 @@ public class ScheduledDiseaseAnalysisService {
                             patientLocation
                         );
 
-                        // Persist condition
+                        // Persist condition using ID-based upsert semantics
                         IFhirResourceDao<Condition> conditionDao = daoRegistry.getResourceDao(Condition.class);
-                        Condition createdCondition = (Condition) conditionDao.create(condition).getResource();
+                        String conditionId = condition.getIdElement().getIdPart();
+                        if (conditionId != null && !conditionId.isBlank()) {
+                            condition.setId(new IdType("Condition", conditionId));
+                        }
+                        Condition createdCondition = (Condition) conditionDao.update(condition).getResource();
                         
                         createdConditions.add(createdCondition);
-                        logger.info("✓ Created NEW Condition for patient {} using {}", patientId, libraryName);
+                        logger.info("✓ Created/Upserted Condition {} for patient {} using {}",
+                                createdCondition.getIdElement().getIdPart(),
+                                patientId,
+                                libraryName);
                     } catch (Exception e) {
                         logger.error("Error creating condition for " + libraryName, e);
                     }

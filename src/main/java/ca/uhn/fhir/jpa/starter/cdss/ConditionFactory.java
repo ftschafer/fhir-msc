@@ -4,7 +4,11 @@ import java.util.Arrays;
 import java.util.Date;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
+import org.hl7.fhir.instance.model.api.IBaseResource;
 import org.hl7.fhir.r4.model.Annotation;
 import org.hl7.fhir.r4.model.CodeableConcept;
 import org.hl7.fhir.r4.model.Condition;
@@ -19,6 +23,12 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
+import ca.uhn.fhir.jpa.api.dao.DaoRegistry;
+import ca.uhn.fhir.jpa.api.dao.IFhirResourceDao;
+import ca.uhn.fhir.jpa.searchparam.SearchParameterMap;
+import ca.uhn.fhir.rest.api.server.IBundleProvider;
+import jakarta.annotation.PostConstruct;
+
 /**
  * Factory class to create FHIR Condition resources from disease detection results
  * Links conditions to patients, observations, and locations
@@ -31,8 +41,24 @@ public class ConditionFactory {
     @Value("${hapi.fhir.location.block:North}")
     private String blockValue;
 
+    private final DaoRegistry daoRegistry;
+    private final AtomicLong conditionSequence = new AtomicLong(0);
+    private String normalizedBlockPrefix;
+
     // Extension URL for patient location (matches News2AggregationService pattern)
     private static final String LOCATION_EXTENSION_URL = "http://patient-location";
+
+    public ConditionFactory(DaoRegistry daoRegistry) {
+        this.daoRegistry = daoRegistry;
+    }
+
+    @PostConstruct
+    public void initializeConditionSequence() {
+        normalizedBlockPrefix = normalizeBlock(blockValue);
+        long maxExisting = findMaxExistingConditionNumber(normalizedBlockPrefix);
+        conditionSequence.set(maxExisting);
+        logger.info("Initialized condition sequence for block {} at c{}", normalizedBlockPrefix, maxExisting);
+    }
 
     /**
      * Create a Condition resource from CQL evaluation results
@@ -54,6 +80,9 @@ public class ConditionFactory {
             Location location) {
 
         Condition condition = new Condition();
+
+        // Stable sequential condition ID in block scope: <block>-c1, <block>-c2, ...
+        condition.setId(buildConditionId());
 
         // Set subject (patient)
         condition.setSubject(new Reference("Patient/" + patientId));
@@ -155,6 +184,53 @@ public class ConditionFactory {
         condition.addNote(note);
 
         return condition;
+    }
+
+    private String buildConditionId() {
+        long next = conditionSequence.incrementAndGet();
+        return normalizedBlockPrefix + "-c" + next;
+    }
+
+    private String normalizeBlock(String block) {
+        if (block == null || block.isBlank()) {
+            return "block";
+        }
+        return block.trim().toLowerCase().replaceAll("[^a-z0-9\\-\\.]", "-");
+    }
+
+    private long findMaxExistingConditionNumber(String blockPrefix) {
+        try {
+            IFhirResourceDao<Condition> conditionDao = daoRegistry.getResourceDao(Condition.class);
+            SearchParameterMap searchMap = new SearchParameterMap();
+            searchMap.setLoadSynchronous(true);
+            IBundleProvider results = conditionDao.search(searchMap);
+
+            Pattern pattern = Pattern.compile("^" + Pattern.quote(blockPrefix) + "-c(\\d+)$");
+            long max = 0;
+
+            for (IBaseResource resource : results.getAllResources()) {
+                if (!(resource instanceof Condition)) {
+                    continue;
+                }
+                Condition condition = (Condition) resource;
+                String idPart = condition.getIdElement().getIdPart();
+                if (idPart == null) {
+                    continue;
+                }
+
+                Matcher matcher = pattern.matcher(idPart.toLowerCase());
+                if (matcher.matches()) {
+                    long n = Long.parseLong(matcher.group(1));
+                    if (n > max) {
+                        max = n;
+                    }
+                }
+            }
+            return max;
+        } catch (Exception e) {
+            logger.warn("Could not initialize condition sequence from existing data. Starting at c0", e);
+            return 0;
+        }
     }
 
     /**

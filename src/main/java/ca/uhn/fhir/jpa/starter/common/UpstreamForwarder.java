@@ -326,9 +326,8 @@ public class UpstreamForwarder {
             Bundle conditionTx = new Bundle().setType(Bundle.BundleType.TRANSACTION);
             
             for (Condition c : conditions) {
-                // Create a copy without the ID to avoid conflicts
+                // Create a copy and preserve deterministic ID for stable upstream upsert
                 Condition conditionCopy = c.copy();
-                conditionCopy.setId((String) null);
                 
                 // Update Observation references in evidence
                 if (conditionCopy.hasEvidence()) {
@@ -346,14 +345,21 @@ public class UpstreamForwarder {
                 }
                 
                 Bundle.BundleEntryComponent e = conditionTx.addEntry().setResource(conditionCopy);
-                
-                // Use conditional update (PUT) to update existing or create new
-                String patientRef = c.getSubject().getReference();
-                String code = c.getCode().getCodingFirstRep().getCode();
-                
-                e.getRequest()
-                    .setMethod(Bundle.HTTPVerb.PUT)
-                    .setUrl("Condition?patient=" + patientRef + "&code=" + code + "&clinical-status=active");
+
+                String conditionId = conditionCopy.getIdElement().getIdPart();
+                if (conditionId != null && !conditionId.isBlank()) {
+                    // Stable ID-based upsert
+                    e.getRequest()
+                        .setMethod(Bundle.HTTPVerb.PUT)
+                        .setUrl("Condition/" + conditionId);
+                } else {
+                    // Fallback conditional upsert
+                    String patientRef = c.getSubject().getReference();
+                    String code = c.getCode().getCodingFirstRep().getCode();
+                    e.getRequest()
+                        .setMethod(Bundle.HTTPVerb.PUT)
+                        .setUrl("Condition?patient=" + patientRef + "&code=" + code + "&clinical-status=active");
+                }
             }
             
             client.transaction().withBundle(conditionTx).execute();
