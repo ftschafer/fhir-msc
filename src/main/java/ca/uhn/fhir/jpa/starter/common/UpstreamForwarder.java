@@ -3,6 +3,7 @@ package ca.uhn.fhir.jpa.starter.common;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.locks.LockSupport;
 
 import org.hl7.fhir.r4.model.Bundle;
 import org.hl7.fhir.r4.model.Condition;
@@ -18,13 +19,13 @@ import org.springframework.stereotype.Component;
 import ca.uhn.fhir.context.FhirContext;
 import ca.uhn.fhir.rest.client.api.IGenericClient;
 import ca.uhn.fhir.rest.client.interceptor.SimpleRequestHeaderInterceptor;
+import ca.uhn.fhir.rest.server.exceptions.BaseServerResponseException;
 import ca.uhn.fhir.rest.server.exceptions.ResourceVersionConflictException;
 
 @Component
 public class UpstreamForwarder {
     private static final Logger ourLog = LoggerFactory.getLogger(UpstreamForwarder.class);
-    private static final int PATIENT_BATCH_SIZE = 20;
-    private static final int PATIENT_RETRY_ATTEMPTS = 3;
+    private static final int PATIENT_RETRY_ATTEMPTS = 6;
 
     @Value("${hapi.fhir.location.block:North}")
     private String blockValue;
@@ -57,7 +58,7 @@ public class UpstreamForwarder {
                 Bundle.BundleEntryComponent e = tx.addEntry().setResource(obsCopy);
                 
                 // Prefer stable identifier when available to avoid duplicate aggregates
-                String conditionalUrl = null;
+                String conditionalUrl;
                 if (o.hasIdentifier() && o.getIdentifierFirstRep().hasSystem() && o.getIdentifierFirstRep().hasValue()) {
                     conditionalUrl = "Observation?identifier=" + o.getIdentifierFirstRep().getSystem() + "|" + o.getIdentifierFirstRep().getValue();
                 } else {
@@ -82,9 +83,10 @@ public class UpstreamForwarder {
                     .setUrl(conditionalUrl);
             }
             client.transaction().withBundle(tx).execute();
+        } catch (BaseServerResponseException e) {
+            ourLog.error("ERROR forwarding observations: {}", e.getMessage());
         } catch (Exception e) {
-            System.err.println("ERROR forwarding observations: " + e.getMessage());
-            e.printStackTrace();
+            ourLog.error("ERROR forwarding observations", e);
         }
     }
 
@@ -93,25 +95,9 @@ public class UpstreamForwarder {
         int total = patients.size();
         int successCount = 0;
 
-        for (int i = 0; i < total; i += PATIENT_BATCH_SIZE) {
-            int toIndex = Math.min(i + PATIENT_BATCH_SIZE, total);
-            List<Patient> batch = patients.subList(i, toIndex);
-
-            try {
-                Bundle tx = new Bundle().setType(Bundle.BundleType.TRANSACTION);
-                for (Patient p : batch) {
-                    Bundle.BundleEntryComponent e = tx.addEntry().setResource(p);
-                    applyPatientUpsertRequest(e, p);
-                }
-                client.transaction().withBundle(tx).execute();
-                successCount += batch.size();
-            } catch (Exception e) {
-                if (isVersionConflict(e)) {
-                    ourLog.warn("Version conflict forwarding patient batch (size {}). Retrying one-by-one.", batch.size());
-                    successCount += retryPatientsIndividually(batch);
-                } else {
-                    ourLog.error("Failed forwarding patient batch of size {}", batch.size(), e);
-                }
+        for (Patient patient : patients) {
+            if (upsertPatientWithRetries(patient)) {
+                successCount++;
             }
         }
 
@@ -120,6 +106,62 @@ public class UpstreamForwarder {
         } else {
             ourLog.info("Forwarded {}/{} patients upstream.", successCount, total);
         }
+    }
+
+    private boolean upsertPatientWithRetries(Patient patient) {
+        for (int attempt = 1; attempt <= PATIENT_RETRY_ATTEMPTS; attempt++) {
+            try {
+                upsertSinglePatient(patient, false);
+                return true;
+            } catch (BaseServerResponseException e) {
+                if (isVersionConflict(e) && attempt < PATIENT_RETRY_ATTEMPTS) {
+                    LockSupport.parkNanos(75L * attempt * 1_000_000L);
+                    continue;
+                }
+
+                // Final fallback: ID-based upsert avoids conditional collisions
+                String patientId = patient.getIdElement().getIdPart();
+                if (patientId != null && !patientId.isBlank()) {
+                    try {
+                        upsertSinglePatient(patient, true);
+                        return true;
+                    } catch (Exception fallbackException) {
+                        ourLog.warn("Failed forwarding patient {} after {} attempt(s): {}",
+                                patientId,
+                                attempt,
+                                fallbackException.getMessage());
+                        return false;
+                    }
+                }
+
+                ourLog.warn("Failed forwarding patient after {} attempt(s): {}", attempt, e.getMessage());
+                return false;
+            } catch (Exception e) {
+                String patientId = patient.getIdElement().getIdPart();
+                ourLog.warn("Failed forwarding patient {} after {} attempt(s): {}",
+                        patientId,
+                        attempt,
+                        e.getMessage());
+                return false;
+            }
+        }
+
+        return false;
+    }
+
+    private void upsertSinglePatient(Patient patient, boolean forceIdBased) {
+        Bundle tx = new Bundle().setType(Bundle.BundleType.TRANSACTION);
+        Bundle.BundleEntryComponent entry = tx.addEntry().setResource(patient);
+
+        if (forceIdBased) {
+            String id = patient.getIdElement().getIdPart();
+            entry.getRequest().setMethod(Bundle.HTTPVerb.PUT)
+                    .setUrl("Patient/" + id);
+        } else {
+            applyPatientUpsertRequest(entry, patient);
+        }
+
+        client.transaction().withBundle(tx).execute();
     }
 
     private void applyPatientUpsertRequest(Bundle.BundleEntryComponent entry, Patient p) {
@@ -134,43 +176,6 @@ public class UpstreamForwarder {
             entry.getRequest().setMethod(Bundle.HTTPVerb.PUT)
                     .setUrl(id != null ? "Patient/" + id : "Patient");
         }
-    }
-
-    private int retryPatientsIndividually(List<Patient> batch) {
-        int successes = 0;
-
-        for (Patient p : batch) {
-            boolean done = false;
-
-            for (int attempt = 1; attempt <= PATIENT_RETRY_ATTEMPTS && !done; attempt++) {
-                try {
-                    Bundle tx = new Bundle().setType(Bundle.BundleType.TRANSACTION);
-                    Bundle.BundleEntryComponent e = tx.addEntry().setResource(p);
-                    applyPatientUpsertRequest(e, p);
-                    client.transaction().withBundle(tx).execute();
-                    successes++;
-                    done = true;
-                } catch (Exception e) {
-                    if (isVersionConflict(e) && attempt < PATIENT_RETRY_ATTEMPTS) {
-                        try {
-                            Thread.sleep(75L * attempt);
-                        } catch (InterruptedException interruptedException) {
-                            Thread.currentThread().interrupt();
-                            return successes;
-                        }
-                    } else {
-                        String patientId = p.getIdElement().getIdPart();
-                        ourLog.warn("Skipping patient {} after {} attempt(s): {}",
-                                patientId,
-                                attempt,
-                                e.getMessage());
-                        done = true;
-                    }
-                }
-            }
-        }
-
-        return successes;
     }
 
     private boolean isVersionConflict(Throwable t) {
@@ -232,7 +237,7 @@ public class UpstreamForwarder {
                 }
             }
             
-            System.out.println("Found " + referencedPatients.size() + " unique patient references to ensure exist upstream");
+            ourLog.debug("Found {} unique patient references to ensure exist upstream", referencedPatients.size());
             
             // Step 1: Ensure all referenced patients exist upstream first
             if (!referencedPatients.isEmpty()) {
@@ -253,9 +258,9 @@ public class UpstreamForwarder {
                 }
                 try {
                     client.transaction().withBundle(patientTx).execute();
-                    System.out.println("Ensured " + referencedPatients.size() + " patients exist upstream");
+                    ourLog.debug("Ensured {} patients exist upstream", referencedPatients.size());
                 } catch (Exception e) {
-                    System.err.println("Warning: Some patients may not exist upstream: " + e.getMessage());
+                    ourLog.warn("Some patients may not exist upstream: {}", e.getMessage());
                     // Continue anyway - the main transaction will fail with a clearer error if patients don't exist
                 }
             }
@@ -265,8 +270,6 @@ public class UpstreamForwarder {
                 Bundle obsTx = new Bundle().setType(Bundle.BundleType.TRANSACTION);
                 
                 for (Observation obs : observations) {
-                    String oldId = obs.getIdElement().getIdPart();
-                    
                     Observation obsCopy = obs.copy();
                     obsCopy.setId((String) null);
                     
@@ -319,7 +322,9 @@ public class UpstreamForwarder {
                         }
                     }
                 }
-                System.out.println("Posted " + observations.size() + " Observations, mapped " + oldToNewObservationIds.size() + " IDs");
+                ourLog.info("Posted {} observations and mapped {} IDs for condition forwarding",
+                    observations.size(),
+                    oldToNewObservationIds.size());
             }
             
             // Step 3: Update Condition references and post Conditions
@@ -364,9 +369,11 @@ public class UpstreamForwarder {
             
             client.transaction().withBundle(conditionTx).execute();
             
+        } catch (BaseServerResponseException e) {
+            ourLog.error("ERROR forwarding conditions: {}", e.getMessage());
+            throw new RuntimeException("Failed to forward conditions", e);
         } catch (Exception e) {
-            System.err.println("ERROR forwarding conditions: " + e.getMessage());
-            e.printStackTrace();
+            ourLog.error("ERROR forwarding conditions", e);
             throw new RuntimeException("Failed to forward conditions", e);
         }
     }
