@@ -244,13 +244,13 @@ public class UpstreamForwarder {
                 Bundle patientTx = new Bundle().setType(Bundle.BundleType.TRANSACTION);
                 for (String patientId : referencedPatients.keySet()) {
                     Bundle.BundleEntryComponent patientEntry = patientTx.addEntry();
-                    // Use conditional create/update to ensure patient exists
-                    patientEntry.setFullUrl("Patient/" + patientId);
+                    // Create-only placeholder: do NOT overwrite existing upstream patients
+                    patientEntry.setFullUrl("urn:uuid:patient-" + patientId);
                     patientEntry.getRequest()
-                        .setMethod(Bundle.HTTPVerb.PUT)
-                        .setUrl("Patient/" + patientId)
+                        .setMethod(Bundle.HTTPVerb.POST)
+                        .setUrl("Patient")
                         .setIfNoneExist("_id=" + patientId);
-                    // Create minimal patient resource as placeholder
+                    // Minimal patient placeholder only if missing upstream
                     Patient placeholderPatient = new Patient();
                     placeholderPatient.setId(patientId);
                     placeholderPatient.setActive(true);
