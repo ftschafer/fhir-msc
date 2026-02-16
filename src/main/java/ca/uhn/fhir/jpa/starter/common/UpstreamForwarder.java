@@ -1,28 +1,33 @@
 package ca.uhn.fhir.jpa.starter.common;
 
-import ca.uhn.fhir.context.FhirContext;
-import ca.uhn.fhir.rest.client.api.IGenericClient;
-import ca.uhn.fhir.rest.client.interceptor.SimpleRequestHeaderInterceptor;
-import ca.uhn.fhir.rest.server.exceptions.ResourceVersionConflictException;
-import org.hl7.fhir.r4.model.Bundle;
-import org.hl7.fhir.r4.model.Identifier;
-import org.hl7.fhir.r4.model.Observation;
-import org.hl7.fhir.r4.model.Patient;
-import org.springframework.beans.factory.annotation.Value;
-import org.springframework.stereotype.Component;
-
-import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
+import org.hl7.fhir.r4.model.Bundle;
+import org.hl7.fhir.r4.model.Condition;
+import org.hl7.fhir.r4.model.Identifier;
+import org.hl7.fhir.r4.model.Observation;
+import org.hl7.fhir.r4.model.Patient;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.stereotype.Component;
+
+import ca.uhn.fhir.context.FhirContext;
+import ca.uhn.fhir.rest.client.api.IGenericClient;
+import ca.uhn.fhir.rest.client.interceptor.SimpleRequestHeaderInterceptor;
+import ca.uhn.fhir.rest.server.exceptions.ResourceVersionConflictException;
+
 @Component
 public class UpstreamForwarder {
+    private static final Logger ourLog = LoggerFactory.getLogger(UpstreamForwarder.class);
     private final IGenericClient client;
     private final String neighborhood;
     private final Map<String, Object> patientLocks = new ConcurrentHashMap<>();
     private final Map<String, Object> observationLocks = new ConcurrentHashMap<>();
+    private final Map<String, Object> conditionLocks = new ConcurrentHashMap<>();
     private static final String LOCATION_EXTENSION_URL = "http://patient-location";
     private static final String NEIGH_URL = "neighborhood";
     private static final String BLOCK_URL = "block";
@@ -45,7 +50,7 @@ public class UpstreamForwarder {
                 // Extract block from observation location extension
                 String block = extractBlock(o);
                 if (block == null || block.isBlank()) continue;
-                String resourceId = o.getIdElement() != null ? o.getIdElement().getIdPart() : null;
+                String resourceId = normalizeIdPart(o.getIdElement() != null ? o.getIdElement().getIdPart() : null);
                 if (resourceId == null || resourceId.isBlank()) continue;
                 String scopedId = buildScopedId(neighborhood, block, resourceId);
                 
@@ -64,7 +69,9 @@ public class UpstreamForwarder {
                     executeObservationUpsertWithRetry(resourceId, o);
                 }
             }
-        } catch (Exception ignored) { }
+        } catch (Exception ex) {
+            ourLog.warn("Failed to forward observations upstream", ex);
+        }
     }
 
     public void upsertPatients(List<Patient> patients) {
@@ -76,7 +83,7 @@ public class UpstreamForwarder {
                 // Extract block from patient location extension
                 String block = extractBlock(p);
                 if (block == null || block.isBlank()) continue;
-                String resourceId = p.getIdElement() != null ? p.getIdElement().getIdPart() : null;
+                String resourceId = normalizeIdPart(p.getIdElement() != null ? p.getIdElement().getIdPart() : null);
                 if (resourceId == null || resourceId.isBlank()) continue;
                 String scopedId = buildScopedId(neighborhood, block, resourceId);
                 
@@ -95,7 +102,35 @@ public class UpstreamForwarder {
                     executePatientUpsertWithRetry(resourceId, p);
                 }
             }
-        } catch (Exception ignored) { }
+        } catch (Exception ex) {
+            ourLog.warn("Failed to forward patients upstream", ex);
+        }
+    }
+
+    public void upsertConditions(List<Condition> conditions) {
+        if (conditions == null || conditions.isEmpty()) return;
+        try {
+            Map<String, Condition> byId = new HashMap<>();
+            for (Condition c : conditions) {
+                String resourceId = normalizeIdPart(c.getIdElement() != null ? c.getIdElement().getIdPart() : null);
+                if (resourceId == null || resourceId.isBlank()) {
+                    // To guarantee same ID upstream, we only forward Condition resources that already have IDs.
+                    continue;
+                }
+                byId.put(resourceId, c);
+            }
+
+            for (Map.Entry<String, Condition> entry : byId.entrySet()) {
+                String resourceId = entry.getKey();
+                Condition c = entry.getValue();
+                Object lock = conditionLocks.computeIfAbsent(resourceId, k -> new Object());
+                synchronized (lock) {
+                    executeConditionUpsertWithRetry(resourceId, c);
+                }
+            }
+        } catch (Exception ex) {
+            ourLog.warn("Failed to forward conditions upstream", ex);
+        }
     }
 
     private void executePatientUpsertWithRetry(String resourceId, Patient patient) {
@@ -104,7 +139,9 @@ public class UpstreamForwarder {
             attempts++;
             try {
                 Bundle tx = new Bundle().setType(Bundle.BundleType.TRANSACTION);
-                Bundle.BundleEntryComponent e = tx.addEntry().setResource((Patient) patient.copy());
+                Patient outbound = (Patient) patient.copy();
+                outbound.setId("Patient/" + resourceId);
+                Bundle.BundleEntryComponent e = tx.addEntry().setResource(outbound);
                 e.getRequest().setMethod(Bundle.HTTPVerb.PUT)
                     .setUrl("Patient/" + resourceId);
                 client.transaction().withBundle(tx).execute();
@@ -124,9 +161,33 @@ public class UpstreamForwarder {
             attempts++;
             try {
                 Bundle tx = new Bundle().setType(Bundle.BundleType.TRANSACTION);
-                Bundle.BundleEntryComponent e = tx.addEntry().setResource((Observation) observation.copy());
+                Observation outbound = (Observation) observation.copy();
+                outbound.setId("Observation/" + resourceId);
+                Bundle.BundleEntryComponent e = tx.addEntry().setResource(outbound);
                 e.getRequest().setMethod(Bundle.HTTPVerb.PUT)
                     .setUrl("Observation/" + resourceId);
+                client.transaction().withBundle(tx).execute();
+                return;
+            } catch (ResourceVersionConflictException ex) {
+                if (attempts >= MAX_RETRIES) return;
+                sleepBackoff(attempts);
+            } catch (Exception ex) {
+                return;
+            }
+        }
+    }
+
+    private void executeConditionUpsertWithRetry(String resourceId, Condition condition) {
+        int attempts = 0;
+        while (attempts < MAX_RETRIES) {
+            attempts++;
+            try {
+                Bundle tx = new Bundle().setType(Bundle.BundleType.TRANSACTION);
+                Condition outbound = (Condition) condition.copy();
+                outbound.setId("Condition/" + resourceId);
+                Bundle.BundleEntryComponent e = tx.addEntry().setResource(outbound);
+                e.getRequest().setMethod(Bundle.HTTPVerb.PUT)
+                    .setUrl("Condition/" + resourceId);
                 client.transaction().withBundle(tx).execute();
                 return;
             } catch (ResourceVersionConflictException ex) {
@@ -149,6 +210,17 @@ public class UpstreamForwarder {
     
     private String buildScopedId(String neighborhood, String block, String resourceId) {
         return neighborhood + "-" + block + "-" + resourceId;
+    }
+
+    private String normalizeIdPart(String idPart) {
+        if (idPart == null) return null;
+        String id = idPart.trim();
+        if (id.isEmpty()) return null;
+        int historyMarker = id.indexOf("/_history/");
+        if (historyMarker > 0) {
+            id = id.substring(0, historyMarker);
+        }
+        return id;
     }
     
     private String extractBlock(org.hl7.fhir.r4.model.Resource resource) {

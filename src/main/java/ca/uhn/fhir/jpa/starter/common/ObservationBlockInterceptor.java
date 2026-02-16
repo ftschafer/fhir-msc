@@ -23,13 +23,13 @@ public class ObservationBlockInterceptor {
     @Hook(Pointcut.STORAGE_PRECOMMIT_RESOURCE_CREATED)
     public void created(IBaseResource resource, RequestDetails requestDetails) {
         if (isInternalRequest(requestDetails)) return;
-        if (resource instanceof Observation obs) enqueueAfterCommit((Observation) resource);
+        if (resource instanceof Observation) enqueueAfterCommit((Observation) resource);
     }
 
     @Hook(Pointcut.STORAGE_PRECOMMIT_RESOURCE_UPDATED)
     public void updated(IBaseResource oldRes, IBaseResource newRes, RequestDetails requestDetails) {
         if (isInternalRequest(requestDetails)) return;
-        if (newRes instanceof Observation obs) enqueueAfterCommit((Observation) newRes);
+        if (newRes instanceof Observation) enqueueAfterCommit((Observation) newRes);
     }
 
     private boolean isInternalRequest(RequestDetails requestDetails) {
