@@ -14,6 +14,7 @@ import org.hl7.fhir.r4.model.IntegerType;
 import org.hl7.fhir.r4.model.Observation;
 import org.hl7.fhir.r4.model.Patient;
 import org.hl7.fhir.r4.model.StringType;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 import ca.uhn.fhir.jpa.api.dao.DaoRegistry;
@@ -39,7 +40,8 @@ public class DashboardProvider implements IResourceProvider {
     // Cache results for 30 seconds
     private DashboardStats cachedStats;
     private long cacheTimestamp = 0;
-    private static final long CACHE_DURATION_MS = 30000;
+    @Value("${dashboard.cache-ms:5000}")
+    private long cacheDurationMs;
 
     public DashboardProvider(DaoRegistry daoRegistry) {
         this.daoRegistry = daoRegistry;
@@ -58,10 +60,12 @@ public class DashboardProvider implements IResourceProvider {
         
         try {
             String filterBlock = blockParam != null ? blockParam.getValue() : null;
+            String requestTs = request.getParameter("_ts");
+            boolean bypassCache = requestTs != null && !requestTs.isBlank();
             
             // Check cache (only if no filter or matches current block)
             long now = System.currentTimeMillis();
-            if (cachedStats != null && (now - cacheTimestamp) < CACHE_DURATION_MS && filterBlock == null) {
+            if (!bypassCache && cachedStats != null && (now - cacheTimestamp) < cacheDurationMs && filterBlock == null) {
                 writeJsonResponse(response, cachedStats);
                 return;
             }
@@ -92,6 +96,7 @@ public class DashboardProvider implements IResourceProvider {
         // Build per-block stats from current patient state
         Map<String, BlockStats> blockStatsMap = new HashMap<>();
         Map<String, NeighborhoodStats> neighborhoodStatsMap = new HashMap<>();
+        Map<String, Map<String, VitalSignAccumulator>> neighborhoodVitalMap = new HashMap<>();
         int totalPatients = 0;
 
         // Get all patients to map to blocks
@@ -217,6 +222,29 @@ public class DashboardProvider implements IResourceProvider {
                         vsa.sampleCount = 0;
                     }
                     bs.vitalSignAverages.add(vsa);
+
+                    String neighborhoodKey = bs.city == null ? "" : bs.city;
+                    Map<String, VitalSignAccumulator> byVital = neighborhoodVitalMap
+                        .computeIfAbsent(neighborhoodKey, k -> new HashMap<>());
+                    String vitalKey = vsa.vitalSign == null ? "" : vsa.vitalSign;
+                    VitalSignAccumulator acc = byVital.computeIfAbsent(vitalKey, k -> new VitalSignAccumulator());
+                    acc.add(vsa.averageValue, vsa.sampleCount, vsa.unit);
+                }
+            }
+        }
+
+        // Build neighborhood vital sign averages from aggregated block averages
+        for (Map.Entry<String, NeighborhoodStats> entry : neighborhoodStatsMap.entrySet()) {
+            String neighborhood = entry.getKey();
+            NeighborhoodStats ns = entry.getValue();
+            Map<String, VitalSignAccumulator> byVital = neighborhoodVitalMap.get(neighborhood);
+            if (byVital == null || byVital.isEmpty()) {
+                continue;
+            }
+            for (Map.Entry<String, VitalSignAccumulator> vitalEntry : byVital.entrySet()) {
+                VitalSignAverage avg = vitalEntry.getValue().toAverage(vitalEntry.getKey());
+                if (avg != null) {
+                    ns.vitalSignAverages.add(avg);
                 }
             }
         }
@@ -428,7 +456,20 @@ public class DashboardProvider implements IResourceProvider {
             json.append("{");
             json.append("\"neighborhood\":\"").append(escapeJson(ns.neighborhood)).append("\",");
             json.append("\"avgNews2\":").append(String.format(Locale.US, "%.1f", ns.patientCount > 0 ? (double) ns.totalScore / ns.patientCount : 0)).append(",");
-            json.append("\"patientCount\":").append(ns.patientCount);
+            json.append("\"patientCount\":").append(ns.patientCount).append(",");
+
+            json.append("\"vitalSignAverages\":[");
+            for (int j = 0; j < ns.vitalSignAverages.size(); j++) {
+                VitalSignAverage vsa = ns.vitalSignAverages.get(j);
+                if (j > 0) json.append(",");
+                json.append("{");
+                json.append("\"vitalSign\":\"").append(escapeJson(vsa.vitalSign)).append("\",");
+                json.append("\"averageValue\":").append(String.format(Locale.US, "%.2f", vsa.averageValue)).append(",");
+                json.append("\"unit\":\"").append(escapeJson(vsa.unit)).append("\",");
+                json.append("\"sampleCount\":").append(vsa.sampleCount);
+                json.append("}");
+            }
+            json.append("]");
             json.append("}");
         }
         json.append("],");
@@ -496,6 +537,7 @@ public class DashboardProvider implements IResourceProvider {
         String neighborhood;
         int totalScore;
         int patientCount;
+        List<VitalSignAverage> vitalSignAverages = new ArrayList<>();
         
         NeighborhoodStats(String neighborhood) {
             this.neighborhood = neighborhood;
@@ -514,6 +556,33 @@ public class DashboardProvider implements IResourceProvider {
         double averageValue;
         String unit;
         int sampleCount;
+    }
+
+    static class VitalSignAccumulator {
+        double weightedValueSum;
+        int totalSamples;
+        String unit;
+
+        void add(double averageValue, int sampleCount, String unitValue) {
+            int weight = sampleCount > 0 ? sampleCount : 1;
+            weightedValueSum += averageValue * weight;
+            totalSamples += weight;
+            if ((unit == null || unit.isBlank()) && unitValue != null && !unitValue.isBlank()) {
+                unit = unitValue;
+            }
+        }
+
+        VitalSignAverage toAverage(String vitalSignName) {
+            if (totalSamples <= 0) {
+                return null;
+            }
+            VitalSignAverage out = new VitalSignAverage();
+            out.vitalSign = vitalSignName;
+            out.averageValue = weightedValueSum / totalSamples;
+            out.unit = unit == null ? "" : unit;
+            out.sampleCount = totalSamples;
+            return out;
+        }
     }
 
 }

@@ -211,6 +211,59 @@
             text-align: center;
             color: #666;
         }
+
+        .auto-refresh-note {
+            margin-left: auto;
+            font-size: 0.85em;
+            color: #555;
+            background: #eef2ff;
+            border: 1px solid #d9e1ff;
+            padding: 6px 10px;
+            border-radius: 6px;
+        }
+
+        .trend-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+            gap: 16px;
+            margin-top: 12px;
+        }
+
+        .trend-card {
+            background: white;
+            border-radius: 8px;
+            padding: 14px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        }
+
+        .trend-title {
+            font-size: 0.95em;
+            font-weight: 600;
+            color: #333;
+            margin-bottom: 4px;
+        }
+
+        .trend-subtitle {
+            font-size: 0.8em;
+            color: #666;
+            margin-bottom: 8px;
+        }
+
+        .trend-current {
+            font-size: 1.05em;
+            color: #667eea;
+            font-weight: 700;
+            margin-bottom: 8px;
+        }
+
+        .trend-svg {
+            width: 100%;
+            height: 120px;
+            display: block;
+            background: #fafbff;
+            border: 1px solid #edf0ff;
+            border-radius: 6px;
+        }
         
         @media (max-width: 768px) {
             .block-stats {
@@ -231,7 +284,7 @@
     <div class="container">
         <header>
             <h1>NEWS2 Block Dashboard</h1>
-            <p class="subtitle">Real-time health aggregation by neighborhood</p>
+            <p class="subtitle">Real-time health aggregation by neighborhood · v2.1</p>
         </header>
         
         <div class="controls">
@@ -239,6 +292,7 @@
                 <label for="blockFilter">Filter by Block:</label>
                 <input type="text" id="blockFilter" placeholder="e.g., Block-North-A (leave empty for all)">
                 <button onclick="loadDashboard()">Load</button>
+                <span class="auto-refresh-note">Auto-refresh: every 5s</span>
             </div>
         </div>
         
@@ -247,19 +301,33 @@
     
     <script>
         const BASE_URL = window.location.origin;
+        const REFRESH_MS = 5000;
+        const MAX_POINTS = 120;
+
+        let autoRefreshHandle = null;
+        let isLoadingDashboard = false;
+        const vitalTrendHistory = new Map();
         
-        function loadDashboard() {
+        function loadDashboard(showLoading = true) {
+            if (isLoadingDashboard) return;
+            isLoadingDashboard = true;
+
             const blockFilter = document.getElementById('blockFilter').value.trim();
             const content = document.getElementById('content');
             
-            content.innerHTML = '<div class="loading">Loading dashboard data...</div>';
+            if (showLoading) {
+                content.innerHTML = '<div class="loading">Loading dashboard data...</div>';
+            }
             
             let url = `${BASE_URL}/fhir/Patient/$dashboard-stats`;
             if (blockFilter) {
                 url += `?block=${encodeURIComponent(blockFilter)}`;
+            } else {
+                url += '?';
             }
+            url += `${url.includes('?') && !url.endsWith('?') ? '&' : ''}_ts=${Date.now()}`;
             
-            fetch(url)
+            fetch(url, { cache: 'no-store' })
                 .then(response => {
                     if (!response.ok) {
                         throw new Error(`HTTP ${response.status}: ${response.statusText}`);
@@ -267,10 +335,13 @@
                     return response.json();
                 })
                 .then(data => {
+                    appendVitalTrendPoints(data);
                     renderDashboard(data);
+                    isLoadingDashboard = false;
                 })
                 .catch(error => {
                     console.error('Error loading dashboard:', error);
+                    isLoadingDashboard = false;
                     content.innerHTML = `
                         <div class="error">
                             <strong>Error:</strong> ${error.message}<br>
@@ -304,15 +375,49 @@
                 html += '<h2 style="color: white; margin: 30px 0 20px 0;">Neighborhood Averages</h2>';
                 html += '<div class="summary">';
                 data.neighborhoodStats.forEach(ns => {
+                    html += '<div class="summary-card">';
                     html += `
-                        <div class="summary-card">
-                            <div class="summary-label">${escapeHtml(ns.neighborhood)}</div>
-                            <div class="summary-value">${ns.avgNews2.toFixed(1)}</div>
-                            <div class="summary-label" style="margin-top: 10px;">${ns.patientCount} patients</div>
-                        </div>
+                        <div class="summary-label">${escapeHtml(ns.neighborhood)}</div>
+                        <div class="summary-value">${ns.avgNews2.toFixed(1)}</div>
+                        <div class="summary-label" style="margin-top: 10px;">${ns.patientCount} patients</div>
                     `;
+
+                    html += '</div>';
                 });
                 html += '</div>';
+
+                // Explicit neighborhood vital sign aggregation section
+                html += '<h2 style="color: white; margin: 30px 0 12px 0;">Neighborhood Vital Sign Aggregates</h2>';
+                data.neighborhoodStats.forEach(ns => {
+                    html += `
+                        <div class="block-card" style="margin-bottom: 14px;">
+                            <div class="block-header">
+                                <div class="block-name">${escapeHtml(ns.neighborhood)}</div>
+                                <div class="block-location">Aggregated from all blocks in this neighborhood</div>
+                            </div>
+                    `;
+
+                    if (ns.vitalSignAverages && ns.vitalSignAverages.length > 0) {
+                        html += '<div style="margin-top: 8px;">';
+                        ns.vitalSignAverages.forEach(vsa => {
+                            html += `
+                                <div style="display:flex; justify-content:space-between; padding:6px 0; border-bottom:1px solid #f0f0f0; font-size:0.92em;">
+                                    <span style="color:#555;">${escapeHtml(vsa.vitalSign)}</span>
+                                    <span style="font-weight:700; color:#667eea;">${vsa.averageValue.toFixed(2)} ${escapeHtml(vsa.unit || '')} <span style="color:#666; font-weight:500;">(n=${vsa.sampleCount || 0})</span></span>
+                                </div>
+                            `;
+                        });
+                        html += '</div>';
+                    } else {
+                        html += '<div style="padding:10px 0; color:#777;">No neighborhood vital-sign aggregates returned by API.</div>';
+                    }
+
+                    html += '</div>';
+                });
+
+                // Live trend graphs
+                html += '<h2 style="color: white; margin: 30px 0 12px 0;">Vital Sign Trends (Live)</h2>';
+                html += renderTrendCharts(data);
             }
             
             // Block cards
@@ -377,6 +482,117 @@
             
             content.innerHTML = html;
         }
+
+        function makeTrendKey(neighborhood, vitalSign) {
+            return `${neighborhood || ''}::${vitalSign || ''}`;
+        }
+
+        function appendVitalTrendPoints(data) {
+            if (!data || !data.neighborhoodStats) return;
+
+            const timestamp = new Date().toLocaleTimeString();
+            data.neighborhoodStats.forEach(ns => {
+                const neighborhood = ns.neighborhood || '';
+                const list = ns.vitalSignAverages || [];
+                list.forEach(vsa => {
+                    const key = makeTrendKey(neighborhood, vsa.vitalSign);
+                    if (!vitalTrendHistory.has(key)) {
+                        vitalTrendHistory.set(key, {
+                            neighborhood,
+                            vitalSign: vsa.vitalSign || '',
+                            unit: vsa.unit || '',
+                            labels: [],
+                            values: []
+                        });
+                    }
+
+                    const series = vitalTrendHistory.get(key);
+                    series.unit = vsa.unit || series.unit || '';
+                    series.labels.push(timestamp);
+                    series.values.push(Number(vsa.averageValue || 0));
+
+                    if (series.values.length > MAX_POINTS) {
+                        series.values.shift();
+                        series.labels.shift();
+                    }
+                });
+            });
+        }
+
+        function renderTrendCharts(data) {
+            if (!data || !data.neighborhoodStats) {
+                return '<div class="empty">No trend data available</div>';
+            }
+
+            let html = '<div class="trend-grid">';
+            let hasAny = false;
+
+            data.neighborhoodStats.forEach(ns => {
+                const neighborhood = ns.neighborhood || '';
+                const list = ns.vitalSignAverages || [];
+                list.forEach(vsa => {
+                    const key = makeTrendKey(neighborhood, vsa.vitalSign);
+                    const series = vitalTrendHistory.get(key);
+                    if (!series || !series.values || series.values.length === 0) return;
+                    hasAny = true;
+
+                    const points = buildPolylinePoints(series.values, 300, 100);
+                    const current = series.values[series.values.length - 1];
+                    const min = Math.min(...series.values);
+                    const max = Math.max(...series.values);
+
+                    html += `
+                        <div class="trend-card">
+                            <div class="trend-title">${escapeHtml(series.vitalSign)}</div>
+                            <div class="trend-subtitle">Neighborhood: ${escapeHtml(neighborhood)}</div>
+                            <div class="trend-current">${Number(current).toFixed(2)} ${escapeHtml(series.unit || '')}</div>
+                            <svg class="trend-svg" viewBox="0 0 320 120" preserveAspectRatio="none" role="img" aria-label="Trend chart for ${escapeHtml(series.vitalSign)}">
+                                <line x1="10" y1="110" x2="310" y2="110" stroke="#d9def7" stroke-width="1" />
+                                <line x1="10" y1="10" x2="10" y2="110" stroke="#d9def7" stroke-width="1" />
+                                <polyline fill="none" stroke="#667eea" stroke-width="2.2" points="${points}" />
+                            </svg>
+                            <div class="trend-subtitle">Min: ${Number(min).toFixed(2)} · Max: ${Number(max).toFixed(2)} · Points: ${series.values.length}</div>
+                        </div>
+                    `;
+                });
+            });
+
+            html += '</div>';
+            if (!hasAny) {
+                return '<div class="empty">No trend samples yet. Wait for refresh cycles.</div>';
+            }
+            return html;
+        }
+
+        function buildPolylinePoints(values, width, height) {
+            if (!values || values.length === 0) return '';
+            const min = Math.min(...values);
+            const max = Math.max(...values);
+            const range = (max - min) || 1;
+
+            const left = 10;
+            const right = width + 10;
+            const top = 10;
+            const bottom = height + 10;
+
+            if (values.length === 1) {
+                const y = bottom - ((values[0] - min) / range) * height;
+                return `${left},${y} ${right},${y}`;
+            }
+
+            return values.map((v, idx) => {
+                const x = left + (idx / (values.length - 1)) * width;
+                const y = bottom - ((v - min) / range) * height;
+                return `${x.toFixed(2)},${y.toFixed(2)}`;
+            }).join(' ');
+        }
+
+        function startAutoRefresh() {
+            if (autoRefreshHandle) {
+                clearInterval(autoRefreshHandle);
+            }
+            autoRefreshHandle = setInterval(() => loadDashboard(false), REFRESH_MS);
+        }
         
         function getRiskLevelBadge(score) {
             if (score >= 7) return '🔴 HIGH';
@@ -395,8 +611,11 @@
             return text.replace(/[&<>"']/g, m => map[m]);
         }
         
-        // Load dashboard on page load
-        window.addEventListener('load', loadDashboard);
+        // Load dashboard on page load and keep refreshing every 5 seconds
+        window.addEventListener('load', () => {
+            loadDashboard(true);
+            startAutoRefresh();
+        });
     </script>
 </body>
 </html>
