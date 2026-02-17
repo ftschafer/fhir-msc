@@ -2,10 +2,10 @@ package ca.uhn.fhir.jpa.starter.common;
 
 import java.time.Instant;
 import java.util.*;
-import java.util.stream.Collectors;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.PersistenceContext;
 import jakarta.transaction.Transactional;
+import jakarta.annotation.PostConstruct;
 
 import ca.uhn.fhir.context.FhirContext;
 import ca.uhn.fhir.jpa.api.dao.DaoRegistry;
@@ -39,6 +39,8 @@ public class News2AggregationService {
     private final DaoRegistry daoRegistry;
     private final FhirContext fhirContext;
     private final MeterRegistry meterRegistry;
+    private static final String LOCATION_EXTENSION_URL = "http://patient-location";
+    private static final String SAMPLE_COUNT_EXTENSION_URL = "http://observation-sample-count";
 
     public News2AggregationService(DaoRegistry daoRegistry, FhirContext fhirContext, MeterRegistry meterRegistry) {
         this.daoRegistry = daoRegistry;
@@ -47,6 +49,20 @@ public class News2AggregationService {
     }
 
     private IFhirResourceDao<Patient> patientDao() { return daoRegistry.getResourceDao(Patient.class); }
+    private IFhirResourceDao<Observation> observationDao() { return daoRegistry.getResourceDao(Observation.class); }
+
+    @PostConstruct
+    public void bootstrapVitalSignAverages() {
+        try {
+            List<String> blocks = em.createQuery(
+                    "SELECT DISTINCT pb.block FROM PatientBlock pb WHERE pb.block IS NOT NULL AND pb.block <> ''",
+                    String.class
+            ).getResultList();
+            recomputeVitalSignAverageObservations(new HashSet<>(blocks));
+        } catch (Exception ex) {
+            logger.debug("Skipping vital-sign average bootstrap", ex);
+        }
+    }
 
     // Call this once per received bundle. observations param = observations from the bundle (new ones).
     @Transactional
@@ -92,6 +108,14 @@ public class News2AggregationService {
                 affectedPatients.add(pid);
             }
         }
+
+            Set<String> affectedBlocks = new HashSet<>(em.createQuery(
+                "SELECT DISTINCT pb.block FROM PatientBlock pb WHERE pb.patientId IN :p AND pb.block IS NOT NULL AND pb.block <> ''",
+                String.class
+            ).setParameter("p", affectedPatients).getResultList());
+
+            recomputeVitalSignAverageObservations(affectedBlocks);
+
         dbTimer.stop(
                 Timer.builder(METRIC_DB)
                         .description("Time spent updating NEWS2 aggregates")
@@ -151,13 +175,99 @@ public class News2AggregationService {
         return 0;
     }
 
+    private void recomputeVitalSignAverageObservations(Set<String> blocks) {
+        if (blocks == null || blocks.isEmpty()) return;
+
+        List<Object[]> rows = em.createQuery(
+                "SELECT pb.block, a.id.code, AVG(a.score), COUNT(a) " +
+                        "FROM News2Aggregate a JOIN PatientBlock pb ON pb.patientId = a.id.patientId " +
+                        "WHERE pb.block IN :blocks GROUP BY pb.block, a.id.code",
+                Object[].class
+        ).setParameter("blocks", blocks).getResultList();
+
+        for (Object[] row : rows) {
+            String block = (String) row[0];
+            String code = (String) row[1];
+            double avg = ((Number) row[2]).doubleValue();
+            int samples = ((Number) row[3]).intValue();
+            upsertVitalAverageObservation(block, code, avg, samples);
+        }
+    }
+
+    private void upsertVitalAverageObservation(String block, String code, double avgValue, int sampleCount) {
+        if (block == null || block.isBlank() || code == null || code.isBlank()) return;
+
+        String obsId = "avg-" + block.toLowerCase(Locale.ROOT) + "-" + code.replace("-", "");
+        Observation obs;
+        try {
+            obs = observationDao().read(fhirContext.getVersion().newIdType("Observation", obsId), null);
+        } catch (Exception ignored) {
+            obs = null;
+        }
+
+        if (obs == null) {
+            obs = new Observation();
+            obs.setId("Observation/" + obsId);
+        }
+
+        obs.setStatus(Observation.ObservationStatus.FINAL);
+        obs.setCode(new CodeableConcept().addCoding(new Coding("http://loinc.org", code, code)));
+        obs.getCategory().clear();
+        obs.addCategory(new CodeableConcept().addCoding(
+                new Coding("http://terminology.hl7.org/CodeSystem/observation-category", "vital-signs-average", "Vital Signs Average")
+        ));
+
+        obs.setValue(new Quantity().setValue(avgValue).setUnit("score").setSystem("http://unitsofmeasure.org").setCode("{score}"));
+        obs.setIssued(new Date());
+
+        Extension sampleExt = obs.getExtensionByUrl(SAMPLE_COUNT_EXTENSION_URL);
+        if (sampleExt == null) {
+            obs.addExtension(new Extension(SAMPLE_COUNT_EXTENSION_URL, new IntegerType(sampleCount)));
+        } else {
+            sampleExt.setValue(new IntegerType(sampleCount));
+        }
+
+        BlockNews2Aggregate agg = em.createQuery(
+                "SELECT b FROM BlockNews2Aggregate b WHERE b.id.block = :block",
+                BlockNews2Aggregate.class
+        ).setParameter("block", block).setMaxResults(1).getResultStream().findFirst().orElse(null);
+
+        Extension locExt = obs.getExtensionByUrl(LOCATION_EXTENSION_URL);
+        if (locExt == null) {
+            locExt = new Extension(LOCATION_EXTENSION_URL);
+            obs.addExtension(locExt);
+        }
+        upsertNestedExtension(locExt, "block", block);
+        if (agg != null) {
+            upsertNestedExtension(locExt, "neighborhood", agg.getNeighborhood());
+            upsertNestedExtension(locExt, "city", agg.getCity());
+        }
+
+        observationDao().update(obs);
+    }
+
+    private void upsertNestedExtension(Extension parent, String url, String value) {
+        if (parent == null || value == null || value.isBlank()) return;
+        Extension existing = parent.getExtension().stream()
+                .filter(e -> e != null && url.equals(e.getUrl()))
+                .findFirst()
+                .orElse(null);
+        if (existing == null) {
+            parent.addExtension(new Extension(url, new StringType(value)));
+        } else {
+            existing.setValue(new StringType(value));
+        }
+    }
+
     private void upsertAggregate(String patientId, String code, int value, Instant obsAt) {
         // Find existing row
         News2Aggregate.Id id = new News2Aggregate.Id(patientId, code);
         News2Aggregate a = em.find(News2Aggregate.class, id);
         if (a == null) {
+            // Use merge for idempotent insert/update semantics.
+            // This avoids duplicate-key errors when the same patient+code pair was already created.
             a = new News2Aggregate(patientId, code, value, obsAt);
-            em.persist(a);
+            em.merge(a);
             return;
         }
         // Only replace if incoming observation is newer

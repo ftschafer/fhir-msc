@@ -1,98 +1,650 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>FHIR City Dashboard</title>
-  <style>
-    body { font-family: Arial, sans-serif; margin: 24px; background: #f7f9fc; color: #1f2937; }
-    .card { background: #fff; border: 1px solid #e5e7eb; border-radius: 10px; padding: 16px; margin-bottom: 16px; }
-    h1 { margin-top: 0; }
-    table { border-collapse: collapse; width: 100%; background: #fff; }
-    th, td { border: 1px solid #e5e7eb; padding: 8px; text-align: left; }
-    th { background: #f3f4f6; }
-    input, button { padding: 8px; margin-right: 8px; }
-    .muted { color: #6b7280; }
-  </style>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NEWS2 City Aggregation Dashboard</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        header {
+            text-align: center;
+            color: white;
+            margin-bottom: 40px;
+        }
+
+        h1 {
+            font-size: 2.5em;
+            margin-bottom: 10px;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
+        }
+
+        .subtitle {
+            font-size: 1.1em;
+            opacity: 0.9;
+        }
+
+        .controls {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            margin-bottom: 30px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        }
+
+        .control-group {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+
+        label {
+            font-weight: 500;
+            color: #333;
+        }
+
+        input[type="text"] {
+            padding: 10px 15px;
+            border: 2px solid #ddd;
+            border-radius: 4px;
+            font-size: 1em;
+            transition: border-color 0.3s;
+        }
+
+        input[type="text"]:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        button {
+            padding: 10px 20px;
+            background: #667eea;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            font-size: 1em;
+            cursor: pointer;
+            transition: background 0.3s;
+        }
+
+        button:hover {
+            background: #5568d3;
+        }
+
+        .auto-refresh-note {
+            margin-left: auto;
+            font-size: 0.85em;
+            color: #555;
+            background: #eef2ff;
+            border: 1px solid #d9e1ff;
+            padding: 6px 10px;
+            border-radius: 6px;
+        }
+
+        .summary {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+
+        .summary-card {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            text-align: center;
+        }
+
+        .summary-label {
+            color: #666;
+            font-size: 0.9em;
+            margin-bottom: 10px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        .summary-value {
+            font-size: 2.5em;
+            font-weight: bold;
+            color: #667eea;
+        }
+
+        .city-container,
+        .blocks-container {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+            gap: 20px;
+        }
+
+        .block-card {
+            background: white;
+            border-radius: 8px;
+            padding: 20px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            transition: transform 0.3s, box-shadow 0.3s;
+        }
+
+        .block-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 8px 12px rgba(0,0,0,0.15);
+        }
+
+        .block-header {
+            border-bottom: 3px solid #667eea;
+            padding-bottom: 15px;
+            margin-bottom: 15px;
+        }
+
+        .block-name {
+            font-size: 1.5em;
+            font-weight: bold;
+            color: #333;
+            margin-bottom: 5px;
+        }
+
+        .block-location {
+            font-size: 0.9em;
+            color: #666;
+        }
+
+        .block-stats {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 15px;
+        }
+
+        .stat-item {
+            padding: 10px;
+            background: #f8f9fa;
+            border-radius: 4px;
+        }
+
+        .stat-label {
+            font-size: 0.85em;
+            color: #666;
+            margin-bottom: 5px;
+        }
+
+        .stat-value {
+            font-size: 1.5em;
+            font-weight: bold;
+            color: #667eea;
+        }
+
+        .stat-value.average { color: #764ba2; }
+        .stat-value.patients { color: #f093fb; }
+
+        .section-title {
+            color: white;
+            margin: 30px 0 20px 0;
+        }
+
+        .error {
+            background: #f8d7da;
+            color: #721c24;
+            padding: 15px;
+            border-radius: 4px;
+            margin-bottom: 20px;
+            border: 1px solid #f5c6cb;
+        }
+
+        .empty {
+            background: white;
+            padding: 40px;
+            border-radius: 8px;
+            text-align: center;
+            color: #666;
+        }
+
+        .vital-list {
+            margin-top: 12px;
+            padding-top: 12px;
+            border-top: 1px solid #ececec;
+        }
+
+        .vital-row {
+            display: flex;
+            justify-content: space-between;
+            font-size: 0.86em;
+            padding: 4px 0;
+        }
+
+        .trend-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+            gap: 16px;
+            margin-top: 8px;
+        }
+
+        .trend-card {
+            background: white;
+            border-radius: 8px;
+            padding: 14px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        }
+
+        .trend-title { font-size: 0.95em; font-weight: 600; color: #333; margin-bottom: 4px; }
+        .trend-subtitle { font-size: 0.8em; color: #666; margin-bottom: 8px; }
+        .trend-current { font-size: 1.05em; color: #667eea; font-weight: 700; margin-bottom: 8px; }
+        .trend-svg {
+            width: 100%;
+            height: 120px;
+            display: block;
+            background: #fafbff;
+            border: 1px solid #edf0ff;
+            border-radius: 6px;
+        }
+
+        @media (max-width: 768px) {
+            .block-stats { grid-template-columns: 1fr; }
+            h1 { font-size: 1.8em; }
+            .summary { grid-template-columns: 1fr; }
+            .control-group { flex-direction: column; align-items: stretch; }
+            .auto-refresh-note { margin-left: 0; }
+        }
+    </style>
 </head>
 <body>
-  <h1>FHIR City Dashboard</h1>
+    <div class="container">
+        <header>
+            <h1>NEWS2 City Dashboard</h1>
+            <p class="subtitle">Real-time health aggregation by city and block · v2.2</p>
+        </header>
 
-  <div class="card">
-    <label for="city">City:</label>
-    <input id="city" type="text" placeholder="e.g. NH" />
-    <button id="loadBtn">Load</button>
-    <span id="status" class="muted"></span>
-  </div>
+        <div class="controls">
+            <div class="control-group">
+                <label for="cityFilter">Filter by City:</label>
+                <input type="text" id="cityFilter" placeholder="e.g., C91 (leave empty for all)">
 
-  <div class="card">
-    <h3>Summary</h3>
-    <div id="summary">No data yet.</div>
-  </div>
+                <label for="blockFilter">Filter by Block:</label>
+                <input type="text" id="blockFilter" placeholder="e.g., B01 (optional)">
 
-  <div class="card">
-    <h3>City Stats</h3>
-    <table>
-      <thead>
-        <tr><th>City</th><th>Patients</th><th>Total NEWS2</th><th>Avg NEWS2</th></tr>
-      </thead>
-      <tbody id="cityStats"></tbody>
-    </table>
-  </div>
+                <button onclick="loadDashboard()">Load</button>
+                <span class="auto-refresh-note" id="status">Auto-refresh: every 5s</span>
+            </div>
+        </div>
 
-  <div class="card">
-    <h3>Block Stats</h3>
-    <table>
-      <thead>
-        <tr><th>Neighborhood</th><th>City</th><th>Block</th><th>Patients</th><th>Total NEWS2</th><th>Avg NEWS2</th></tr>
-      </thead>
-      <tbody id="blockStats"></tbody>
-    </table>
-  </div>
+        <div id="content"></div>
+    </div>
 
-  <script>
-    const statusEl = document.getElementById('status');
-    const summaryEl = document.getElementById('summary');
-    const cityStatsEl = document.getElementById('cityStats');
-    const blockStatsEl = document.getElementById('blockStats');
+    <script>
+        const REFRESH_MS = 5000;
+        const MAX_POINTS = 120;
+        let autoRefreshHandle = null;
+        let isLoadingDashboard = false;
+        const cityVitalTrendHistory = new Map();
 
-    async function loadDashboard() {
-      const city = document.getElementById('city').value.trim();
-      statusEl.textContent = 'Loading...';
+        function escapeHtml(text) {
+            const map = {
+                '&': '&amp;',
+                '<': '&lt;',
+                '>': '&gt;',
+                '"': '&quot;',
+                "'": '&#039;'
+            };
+            return String(text ?? '').replace(/[&<>"']/g, m => map[m]);
+        }
 
-      const url = city
-        ? `/fhir/Patient/$dashboard-stats?city=${encodeURIComponent(city)}`
-        : '/fhir/Patient/$dashboard-stats';
+        function getRiskLevelBadge(score) {
+            if (score >= 7) return '🔴 HIGH';
+            if (score >= 5) return '🟡 MEDIUM';
+            return '🟢 LOW';
+        }
 
-      try {
-        const res = await fetch(url, { headers: { Accept: 'application/json' } });
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        function buildUrl() {
+            const cityFilter = document.getElementById('cityFilter').value.trim();
+            const params = new URLSearchParams();
+            if (cityFilter) params.set('city', cityFilter);
+            params.set('_ts', Date.now().toString());
+            return `/fhir/Patient/$dashboard-stats?${params.toString()}`;
+        }
 
-        const data = await res.json();
-        summaryEl.textContent = `Patients: ${data.totalPatients} | Total NEWS2: ${data.totalScore} | Avg NEWS2: ${data.avgNews2}`;
+        function makeCityTrendKey(city, vitalSign) {
+            return `${city || ''}::${vitalSign || ''}`;
+        }
 
-        cityStatsEl.innerHTML = '';
-        (data.cityStats || []).forEach(row => {
-          const tr = document.createElement('tr');
-          tr.innerHTML = `<td>${row.city || ''}</td><td>${row.patientCount}</td><td>${row.totalScore}</td><td>${row.avgNews2}</td>`;
-          cityStatsEl.appendChild(tr);
+        function appendCityVitalTrendPoints(data) {
+            if (!data || !Array.isArray(data.cityStats)) return;
+            const timestamp = new Date().toLocaleTimeString();
+
+            data.cityStats.forEach(cs => {
+                const city = cs.city || '';
+                const vitals = Array.isArray(cs.vitalSignAverages) ? cs.vitalSignAverages : [];
+                vitals.forEach(v => {
+                    const key = makeCityTrendKey(city, v.vitalSign);
+                    if (!cityVitalTrendHistory.has(key)) {
+                        cityVitalTrendHistory.set(key, {
+                            city,
+                            vitalSign: v.vitalSign || '',
+                            unit: v.unit || '',
+                            values: [],
+                            labels: []
+                        });
+                    }
+                    const series = cityVitalTrendHistory.get(key);
+                    series.unit = v.unit || series.unit || '';
+                    series.values.push(Number(v.averageValue || 0));
+                    series.labels.push(timestamp);
+
+                    if (series.values.length > MAX_POINTS) {
+                        series.values.shift();
+                        series.labels.shift();
+                    }
+                });
+            });
+        }
+
+        function buildPolylinePoints(values, width, height) {
+            if (!values || values.length === 0) return '';
+            const min = Math.min(...values);
+            const max = Math.max(...values);
+            const range = (max - min) || 1;
+            const left = 10;
+            const right = width + 10;
+            const top = 10;
+            const bottom = height + 10;
+
+            if (values.length === 1) {
+                const y = bottom - ((values[0] - min) / range) * height;
+                return `${left},${y} ${right},${y}`;
+            }
+
+            return values.map((v, idx) => {
+                const x = left + (idx / (values.length - 1)) * width;
+                const y = bottom - ((v - min) / range) * height;
+                return `${x.toFixed(2)},${y.toFixed(2)}`;
+            }).join(' ');
+        }
+
+        function renderCityTrendCharts(data) {
+            if (!data || !Array.isArray(data.cityStats)) {
+                return '<div class="empty">No trend data available</div>';
+            }
+
+            let html = '<div class="trend-grid">';
+            let hasAny = false;
+            data.cityStats.forEach(cs => {
+                const city = cs.city || '';
+                const vitals = Array.isArray(cs.vitalSignAverages) ? cs.vitalSignAverages : [];
+                vitals.forEach(v => {
+                    const key = makeCityTrendKey(city, v.vitalSign);
+                    const series = cityVitalTrendHistory.get(key);
+                    if (!series || !series.values || series.values.length === 0) return;
+
+                    hasAny = true;
+                    const points = buildPolylinePoints(series.values, 300, 100);
+                    const current = series.values[series.values.length - 1];
+                    const min = Math.min(...series.values);
+                    const max = Math.max(...series.values);
+
+                    html += `
+                        <div class="trend-card">
+                            <div class="trend-title">${escapeHtml(series.vitalSign)}</div>
+                            <div class="trend-subtitle">City: ${escapeHtml(city)}</div>
+                            <div class="trend-current">${Number(current).toFixed(2)} ${escapeHtml(series.unit || '')}</div>
+                            <svg class="trend-svg" viewBox="0 0 320 120" preserveAspectRatio="none">
+                                <line x1="10" y1="110" x2="310" y2="110" stroke="#d9def7" stroke-width="1" />
+                                <line x1="10" y1="10" x2="10" y2="110" stroke="#d9def7" stroke-width="1" />
+                                <polyline fill="none" stroke="#667eea" stroke-width="2.2" points="${points}" />
+                            </svg>
+                            <div class="trend-subtitle">Min: ${Number(min).toFixed(2)} · Max: ${Number(max).toFixed(2)} · Points: ${series.values.length}</div>
+                        </div>
+                    `;
+                });
+            });
+
+            html += '</div>';
+            if (!hasAny) return '<div class="empty">No city vital-sign trend samples yet.</div>';
+            return html;
+        }
+
+        function renderDashboard(data) {
+            const content = document.getElementById('content');
+            const blockFilter = document.getElementById('blockFilter').value.trim().toLowerCase();
+
+            const cityStats = Array.isArray(data.cityStats) ? data.cityStats : [];
+            const allBlocks = Array.isArray(data.blockStats) ? data.blockStats : [];
+            const blockStats = blockFilter
+                ? allBlocks.filter(b => String(b.block || '').toLowerCase().includes(blockFilter))
+                : allBlocks;
+
+            let html = '';
+
+            html += '<div class="summary">';
+            html += `
+                <div class="summary-card">
+                    <div class="summary-label">Total Patients</div>
+                    <div class="summary-value">${Number(data.totalPatients || 0)}</div>
+                </div>
+                <div class="summary-card">
+                    <div class="summary-label">Total Conditions</div>
+                    <div class="summary-value">${Number(data.totalConditions || 0)}</div>
+                </div>
+                <div class="summary-card">
+                    <div class="summary-label">Average NEWS2</div>
+                    <div class="summary-value">${Number(data.avgNews2 || 0).toFixed(1)}</div>
+                </div>
+                <div class="summary-card">
+                    <div class="summary-label">Visible Blocks</div>
+                    <div class="summary-value">${blockStats.length}</div>
+                </div>
+            `;
+            html += '</div>';
+
+            if (cityStats.length > 0) {
+                html += '<h2 class="section-title">City Averages</h2>';
+                html += '<div class="city-container">';
+                cityStats.forEach(city => {
+                    const avg = Number(city.avgNews2 || 0);
+                    const cityVitals = Array.isArray(city.vitalSignAverages) ? city.vitalSignAverages : [];
+                    html += `
+                        <div class="block-card">
+                            <div class="block-header">
+                                <div class="block-name">${escapeHtml(city.city || 'Unknown')}</div>
+                                <div class="block-location">City aggregate</div>
+                            </div>
+                            <div class="block-stats">
+                                <div class="stat-item">
+                                    <div class="stat-label">Patients</div>
+                                    <div class="stat-value patients">${Number(city.patientCount || 0)}</div>
+                                </div>
+                                <div class="stat-item">
+                                    <div class="stat-label">Conditions</div>
+                                    <div class="stat-value">${Number(city.conditionCount || 0)}</div>
+                                </div>
+                                <div class="stat-item">
+                                    <div class="stat-label">Avg NEWS2</div>
+                                    <div class="stat-value average">${avg.toFixed(1)}</div>
+                                </div>
+                                <div class="stat-item">
+                                    <div class="stat-label">Risk Level</div>
+                                    <div class="stat-value">${getRiskLevelBadge(avg)}</div>
+                                </div>
+                            </div>
+                            <div class="vital-list">
+                                <div class="stat-label" style="margin-bottom:6px;">Vital Sign Averages</div>
+                                ${cityVitals.length > 0
+                                    ? cityVitals.map(v => `
+                                        <div class="vital-row">
+                                            <span>${escapeHtml(v.vitalSign || 'unknown')}</span>
+                                            <strong>${Number(v.averageValue || 0).toFixed(2)} ${escapeHtml(v.unit || '')}</strong>
+                                        </div>`).join('')
+                                    : '<div class="vital-row"><span>No vital-sign averages found</span></div>'}
+                            </div>
+                        </div>
+                    `;
+                });
+                html += '</div>';
+
+                html += '<h2 class="section-title">City Vital Sign Trends (Live)</h2>';
+                html += renderCityTrendCharts(data);
+            }
+
+            const neighborhoodStats = Array.isArray(data.neighborhoodStats) ? data.neighborhoodStats : [];
+            if (neighborhoodStats.length > 0) {
+                html += '<h2 class="section-title">Neighborhood Averages</h2>';
+                html += '<div class="city-container">';
+                neighborhoodStats
+                    .sort((a, b) => String(a.neighborhood || '').localeCompare(String(b.neighborhood || '')))
+                    .forEach(n => {
+                        const avg = Number(n.avgNews2 || 0);
+                        const nVitals = Array.isArray(n.vitalSignAverages) ? n.vitalSignAverages : [];
+                        html += `
+                        <div class="block-card">
+                            <div class="block-header">
+                                <div class="block-name">${escapeHtml(n.neighborhood || 'Unknown')}</div>
+                                <div class="block-location">${escapeHtml(n.city || 'Unknown city')}</div>
+                            </div>
+                            <div class="block-stats">
+                                <div class="stat-item">
+                                    <div class="stat-label">Patients</div>
+                                    <div class="stat-value patients">${Number(n.patientCount || 0)}</div>
+                                </div>
+                                <div class="stat-item">
+                                    <div class="stat-label">Conditions</div>
+                                    <div class="stat-value">${Number(n.conditionCount || 0)}</div>
+                                </div>
+                                <div class="stat-item">
+                                    <div class="stat-label">Avg NEWS2</div>
+                                    <div class="stat-value average">${avg.toFixed(1)}</div>
+                                </div>
+                                <div class="stat-item">
+                                    <div class="stat-label">Risk Level</div>
+                                    <div class="stat-value">${getRiskLevelBadge(avg)}</div>
+                                </div>
+                            </div>
+                            <div class="vital-list">
+                                <div class="stat-label" style="margin-bottom:6px;">Vital Sign Averages</div>
+                                ${nVitals.length > 0
+                                    ? nVitals.map(v => `
+                                        <div class="vital-row">
+                                            <span>${escapeHtml(v.vitalSign || 'unknown')}</span>
+                                            <strong>${Number(v.averageValue || 0).toFixed(2)} ${escapeHtml(v.unit || '')}</strong>
+                                        </div>`).join('')
+                                    : '<div class="vital-row"><span>No vital-sign averages found</span></div>'}
+                            </div>
+                        </div>
+                    `;
+                    });
+                html += '</div>';
+            }
+
+            if (blockStats.length > 0) {
+                html += '<h2 class="section-title">Block Details</h2>';
+                html += '<div class="blocks-container">';
+
+                blockStats.sort((a, b) => String(a.block || '').localeCompare(String(b.block || '')));
+
+                blockStats.forEach(block => {
+                    const avg = Number(block.avgNews2 || 0);
+                    const blockVitals = Array.isArray(block.vitalSignAverages) ? block.vitalSignAverages : [];
+                    html += `
+                        <div class="block-card">
+                            <div class="block-header">
+                                <div class="block-name">${escapeHtml(block.block || 'Unknown')}</div>
+                                <div class="block-location">${escapeHtml(block.neighborhood || 'Unknown neighborhood')} • ${escapeHtml(block.city || 'Unknown city')}</div>
+                            </div>
+                            <div class="block-stats">
+                                <div class="stat-item">
+                                    <div class="stat-label">Patients</div>
+                                    <div class="stat-value patients">${Number(block.patientCount || 0)}</div>
+                                </div>
+                                <div class="stat-item">
+                                    <div class="stat-label">Conditions</div>
+                                    <div class="stat-value">${Number(block.conditionCount || 0)}</div>
+                                </div>
+                                <div class="stat-item">
+                                    <div class="stat-label">Avg NEWS2</div>
+                                    <div class="stat-value average">${avg.toFixed(1)}</div>
+                                </div>
+                                <div class="stat-item">
+                                    <div class="stat-label">Risk Level</div>
+                                    <div class="stat-value">${getRiskLevelBadge(avg)}</div>
+                                </div>
+                            </div>
+                            <div class="vital-list">
+                                <div class="stat-label" style="margin-bottom:6px;">Vital Sign Averages</div>
+                                ${blockVitals.length > 0
+                                    ? blockVitals.map(v => `
+                                        <div class="vital-row">
+                                            <span>${escapeHtml(v.vitalSign || 'unknown')}</span>
+                                            <strong>${Number(v.averageValue || 0).toFixed(2)} ${escapeHtml(v.unit || '')}</strong>
+                                        </div>`).join('')
+                                    : '<div class="vital-row"><span>No vital-sign averages found</span></div>'}
+                            </div>
+                        </div>
+                    `;
+                });
+
+                html += '</div>';
+            } else {
+                html += '<div class="empty">No block data available for current filters.</div>';
+            }
+
+            content.innerHTML = html;
+        }
+
+        async function loadDashboard(showLoading = true) {
+            if (isLoadingDashboard) return;
+            isLoadingDashboard = true;
+
+            const content = document.getElementById('content');
+            const status = document.getElementById('status');
+
+            if (showLoading) {
+                content.innerHTML = '<div class="empty">Loading dashboard data...</div>';
+            }
+
+            try {
+                const response = await fetch(buildUrl(), { cache: 'no-store', headers: { Accept: 'application/json' } });
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+
+                const data = await response.json();
+                appendCityVitalTrendPoints(data);
+                renderDashboard(data);
+                status.textContent = `Last update: ${new Date().toLocaleTimeString()} · Auto-refresh: every 5s`;
+            } catch (error) {
+                content.innerHTML = `
+                    <div class="error">
+                        <strong>Error:</strong> ${escapeHtml(error.message)}<br>
+                        <small>Make sure the FHIR server is running and endpoint /fhir/Patient/$dashboard-stats is accessible.</small>
+                    </div>
+                `;
+                status.textContent = 'Failed to refresh';
+            } finally {
+                isLoadingDashboard = false;
+            }
+        }
+
+        function startAutoRefresh() {
+            if (autoRefreshHandle) clearInterval(autoRefreshHandle);
+            autoRefreshHandle = setInterval(() => loadDashboard(false), REFRESH_MS);
+        }
+
+        window.addEventListener('load', () => {
+            loadDashboard(true);
+            startAutoRefresh();
         });
-
-        blockStatsEl.innerHTML = '';
-        (data.blockStats || []).forEach(row => {
-          const tr = document.createElement('tr');
-          tr.innerHTML = `<td>${row.neighborhood || ''}</td><td>${row.city || ''}</td><td>${row.block || ''}</td><td>${row.patientCount}</td><td>${row.totalScore}</td><td>${row.avgNews2}</td>`;
-          blockStatsEl.appendChild(tr);
-        });
-
-        statusEl.textContent = 'Loaded';
-      } catch (e) {
-        statusEl.textContent = `Error: ${e.message}`;
-      }
-    }
-
-    document.getElementById('loadBtn').addEventListener('click', loadDashboard);
-    loadDashboard();
-  </script>
+    </script>
 </body>
 </html>
