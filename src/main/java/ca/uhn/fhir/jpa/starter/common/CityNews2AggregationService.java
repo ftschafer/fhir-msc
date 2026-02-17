@@ -9,6 +9,7 @@ import jakarta.persistence.EntityManager;
 import jakarta.persistence.PersistenceContext;
 import jakarta.transaction.Transactional;
 import org.hl7.fhir.r4.model.*;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 import org.springframework.transaction.support.TransactionSynchronization;
@@ -49,8 +50,10 @@ public class CityNews2AggregationService {
     private static final String LOCATION_EXTENSION_URL = "http://patient-location";
     private static final String NEIGH_URL = "neighborhood";
     private static final String CITY_URL = "city";
-    private static final String CITY_VALUE = "NH";
     private static final String BLOCK_URL = "block";
+
+    @Value("${location.city}")
+    private String locationCity;
 
     private final MeterRegistry meterRegistry;
 
@@ -243,7 +246,7 @@ public class CityNews2AggregationService {
         if (!hasCity) {
             locExt.addExtension(new Extension()
                     .setUrl(CITY_URL)
-                    .setValue(new StringType(CITY_VALUE)));
+                    .setValue(new StringType(locationCity)));
 
             patientDao().update(patient);
 

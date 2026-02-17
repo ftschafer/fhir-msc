@@ -3,6 +3,7 @@ package ca.uhn.fhir.jpa.starter.common;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.HttpStatus;
+import org.springframework.beans.factory.annotation.Value;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.PersistenceContext;
 import jakarta.transaction.Transactional;
@@ -12,7 +13,8 @@ import java.util.*;
 @RequestMapping("/city-details")
 public class BlockNews2AggregateController {
 
-    static final String CITY_VALUE = "NH";
+    @Value("${location.city}")
+    private String locationCity;
 
     @PersistenceContext
     private EntityManager em;
@@ -45,56 +47,57 @@ public class BlockNews2AggregateController {
         return ResponseEntity.ok(result);
     }
 
-    // Get city-level average (aggregated across blocks) using extension URL params
-    // @GetMapping("/city-average")
-    // @Transactional
-    // public Map<String, Object> getCityAverage(
-    //         @RequestParam(value = "neighborhood", required = false) String neighborhood
-    // ) {
-    //     Object[] totals = em.createQuery(
-    //             neighborhood == null
-    //                     ? "SELECT COALESCE(SUM(b.totalScore),0), COALESCE(SUM(b.patientCount),0) FROM BlockNews2Aggregate b WHERE b.id.city = :city"
-    //                     : "SELECT COALESCE(SUM(b.totalScore),0), COALESCE(SUM(b.patientCount),0) FROM BlockNews2Aggregate b WHERE b.id.neighborhood = :neighborhood AND b.id.city = :city",
-    //             Object[].class
-    //     )
-    //     .setParameter("city", CITY_VALUE)
-    //     .setParameter("neighborhood", neighborhood)
-    //     .getSingleResult();
+    @GetMapping("/city-average")
+    @Transactional
+    public Map<String, Object> getCityAverage(
+            @RequestParam(value = "city", required = false) String city,
+            @RequestParam(value = "neighborhood", required = false) String neighborhood
+    ) {
+        String cityValue = (city == null || city.isBlank()) ? locationCity : city;
+        String where = (neighborhood == null || neighborhood.isBlank())
+                ? " WHERE b.id.city = :city"
+                : " WHERE b.id.neighborhood = :neighborhood AND b.id.city = :city";
 
-    //     int totalScore = ((Number) totals[0]).intValue();
-    //     int patientCount = ((Number) totals[1]).intValue();
-    //     double average = patientCount == 0 ? 0.0 : (double) totalScore / patientCount;
+        var totalsQuery = em.createQuery(
+                "SELECT COALESCE(SUM(b.totalScore),0), COALESCE(SUM(b.patientCount),0) FROM BlockNews2Aggregate b" + where,
+                Object[].class
+        ).setParameter("city", cityValue);
+        if (neighborhood != null && !neighborhood.isBlank()) {
+            totalsQuery.setParameter("neighborhood", neighborhood);
+        }
+        Object[] totals = totalsQuery.getSingleResult();
 
-    //     Map<String, Object> result = new LinkedHashMap<>();
-    //     result.put("neighborhood", neighborhood);
-    //     result.put("city", CITY_VALUE);
-    //     result.put("totalScore", totalScore);
-    //     result.put("patientCount", patientCount);
-    //     result.put("average", average);
+        int totalScore = ((Number) totals[0]).intValue();
+        int patientCount = ((Number) totals[1]).intValue();
+        double average = patientCount == 0 ? 0.0 : (double) totalScore / patientCount;
 
-    //     List<BlockNews2Aggregate> aggs = em.createQuery(
-    //             neighborhood == null
-    //                     ? "SELECT b FROM BlockNews2Aggregate b WHERE b.id.city = :city"
-    //                     : "SELECT b FROM BlockNews2Aggregate b WHERE b.id.neighborhood = :neighborhood AND b.id.city = :city",
-    //             BlockNews2Aggregate.class
-    //     )
-    //     .setParameter("city", CITY_VALUE)
-    //     .setParameter("neighborhood", neighborhood)
-    //     .getResultList();
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("neighborhood", neighborhood);
+        result.put("city", cityValue);
+        result.put("totalScore", totalScore);
+        result.put("patientCount", patientCount);
+        result.put("average", average);
 
-    //     List<Map<String, Object>> blocks = new ArrayList<>();
-    //     for (BlockNews2Aggregate agg : aggs) {
-    //         double avgBlock = agg.getPatientCount() == 0 ? 0.0 : (double) agg.getTotalScore() / agg.getPatientCount();
-    //         Map<String, Object> entry = new LinkedHashMap<>();
-    //         entry.put("block", agg.getBlock());
-    //         entry.put("average", avgBlock);
-    //         entry.put("patientCount", agg.getPatientCount());
-    //         entry.put("totalScore", agg.getTotalScore());
-    //         blocks.add(entry);
-    //     }
-    //     result.put("blocks", blocks);
-    //     return result;
-    // }
+        var blocksQuery = em.createQuery("SELECT b FROM BlockNews2Aggregate b" + where, BlockNews2Aggregate.class)
+                .setParameter("city", cityValue);
+        if (neighborhood != null && !neighborhood.isBlank()) {
+            blocksQuery.setParameter("neighborhood", neighborhood);
+        }
+        List<BlockNews2Aggregate> aggs = blocksQuery.getResultList();
+
+        List<Map<String, Object>> blocks = new ArrayList<>();
+        for (BlockNews2Aggregate agg : aggs) {
+            double avgBlock = agg.getPatientCount() == 0 ? 0.0 : (double) agg.getTotalScore() / agg.getPatientCount();
+            Map<String, Object> entry = new LinkedHashMap<>();
+            entry.put("block", agg.getBlock());
+            entry.put("average", avgBlock);
+            entry.put("patientCount", agg.getPatientCount());
+            entry.put("totalScore", agg.getTotalScore());
+            blocks.add(entry);
+        }
+        result.put("blocks", blocks);
+        return result;
+    }
 
     // Get all neighborhoods in a city and their averages
     // @GetMapping("/cities/{city}/neighborhoods")

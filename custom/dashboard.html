@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>FHIR City Dashboard</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 24px; background: #f7f9fc; color: #1f2937; }
+    .card { background: #fff; border: 1px solid #e5e7eb; border-radius: 10px; padding: 16px; margin-bottom: 16px; }
+    h1 { margin-top: 0; }
+    table { border-collapse: collapse; width: 100%; background: #fff; }
+    th, td { border: 1px solid #e5e7eb; padding: 8px; text-align: left; }
+    th { background: #f3f4f6; }
+    input, button { padding: 8px; margin-right: 8px; }
+    .muted { color: #6b7280; }
+  </style>
+</head>
+<body>
+  <h1>FHIR City Dashboard</h1>
+
+  <div class="card">
+    <label for="city">City:</label>
+    <input id="city" type="text" placeholder="e.g. NH" />
+    <button id="loadBtn">Load</button>
+    <span id="status" class="muted"></span>
+  </div>
+
+  <div class="card">
+    <h3>Summary</h3>
+    <div id="summary">No data yet.</div>
+  </div>
+
+  <div class="card">
+    <h3>City Stats</h3>
+    <table>
+      <thead>
+        <tr><th>City</th><th>Patients</th><th>Total NEWS2</th><th>Avg NEWS2</th></tr>
+      </thead>
+      <tbody id="cityStats"></tbody>
+    </table>
+  </div>
+
+  <div class="card">
+    <h3>Block Stats</h3>
+    <table>
+      <thead>
+        <tr><th>Neighborhood</th><th>City</th><th>Block</th><th>Patients</th><th>Total NEWS2</th><th>Avg NEWS2</th></tr>
+      </thead>
+      <tbody id="blockStats"></tbody>
+    </table>
+  </div>
+
+  <script>
+    const statusEl = document.getElementById('status');
+    const summaryEl = document.getElementById('summary');
+    const cityStatsEl = document.getElementById('cityStats');
+    const blockStatsEl = document.getElementById('blockStats');
+
+    async function loadDashboard() {
+      const city = document.getElementById('city').value.trim();
+      statusEl.textContent = 'Loading...';
+
+      const url = city
+        ? `/fhir/Patient/$dashboard-stats?city=${encodeURIComponent(city)}`
+        : '/fhir/Patient/$dashboard-stats';
+
+      try {
+        const res = await fetch(url, { headers: { Accept: 'application/json' } });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+        const data = await res.json();
+        summaryEl.textContent = `Patients: ${data.totalPatients} | Total NEWS2: ${data.totalScore} | Avg NEWS2: ${data.avgNews2}`;
+
+        cityStatsEl.innerHTML = '';
+        (data.cityStats || []).forEach(row => {
+          const tr = document.createElement('tr');
+          tr.innerHTML = `<td>${row.city || ''}</td><td>${row.patientCount}</td><td>${row.totalScore}</td><td>${row.avgNews2}</td>`;
+          cityStatsEl.appendChild(tr);
+        });
+
+        blockStatsEl.innerHTML = '';
+        (data.blockStats || []).forEach(row => {
+          const tr = document.createElement('tr');
+          tr.innerHTML = `<td>${row.neighborhood || ''}</td><td>${row.city || ''}</td><td>${row.block || ''}</td><td>${row.patientCount}</td><td>${row.totalScore}</td><td>${row.avgNews2}</td>`;
+          blockStatsEl.appendChild(tr);
+        });
+
+        statusEl.textContent = 'Loaded';
+      } catch (e) {
+        statusEl.textContent = `Error: ${e.message}`;
+      }
+    }
+
+    document.getElementById('loadBtn').addEventListener('click', loadDashboard);
+    loadDashboard();
+  </script>
+</body>
+</html>

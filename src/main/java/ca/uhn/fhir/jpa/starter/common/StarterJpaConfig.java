@@ -290,6 +290,7 @@ public class StarterJpaConfig {
 			News2AggregationInterceptorDB news2AggregationInterceptorDB,
 			ObservationBlockInterceptor observationBlockInterceptor,
 			PatientBlockInterceptor patientBlockInterceptor,
+			LocationExtensionInterceptor locationExtensionInterceptor,
 			Optional<GraphQLProvider> graphQLProvider,
 			BulkDataExportProvider bulkDataExportProvider,
 			BulkDataImportProvider bulkDataImportProvider,
@@ -327,6 +328,7 @@ public class StarterJpaConfig {
 		fhirServer.registerInterceptor(news2AggregationInterceptorDB);
 		fhirServer.registerInterceptor(observationBlockInterceptor);
 		fhirServer.registerInterceptor(patientBlockInterceptor);
+		fhirServer.registerInterceptor(locationExtensionInterceptor);
 		fhirServer.setServerConformanceProvider(calculateConformanceProvider(
 				fhirSystemDao, fhirServer, jpaStorageSettings, searchParamRegistry, theValidationSupport));
 
