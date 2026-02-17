@@ -13,6 +13,8 @@ import org.hl7.fhir.r4.model.Condition;
 import org.hl7.fhir.r4.model.Observation;
 import org.hl7.fhir.r4.model.Patient;
 import org.hl7.fhir.r4.model.Reference;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
@@ -29,8 +31,9 @@ import ca.uhn.fhir.rest.param.TokenParam;
 
 @Component
 public class ConditionUpstreamForwardingInterceptor {
+    private static final Logger ourLog = LoggerFactory.getLogger(ConditionUpstreamForwardingInterceptor.class);
 
-    private static final String INTERNAL_REQUEST_HEADER = "X-Internal-Request";
+    private static final String INTERNAL_REQUEST_HEADER = "X-Upstream-Internal-Request";
     private static final String OBSERVATION_PREFIX = "Observation/";
     private static final String PATIENT_PREFIX = "Patient/";
     private static final String AVG_CATEGORY_SYSTEM = "http://terminology.hl7.org/CodeSystem/observation-category";
@@ -46,7 +49,7 @@ public class ConditionUpstreamForwardingInterceptor {
 
     @Hook(Pointcut.STORAGE_PRECOMMIT_RESOURCE_CREATED)
     public void created(IBaseResource resource, RequestDetails requestDetails) {
-        if (isInternalRequest(requestDetails)) return;
+        if (requestDetails == null || isInternalRequest(requestDetails)) return;
         if (resource instanceof Condition condition) {
             enqueueAfterCommit(condition);
         }
@@ -54,7 +57,7 @@ public class ConditionUpstreamForwardingInterceptor {
 
     @Hook(Pointcut.STORAGE_PRECOMMIT_RESOURCE_UPDATED)
     public void updated(IBaseResource oldResource, IBaseResource newResource, RequestDetails requestDetails) {
-        if (isInternalRequest(requestDetails)) return;
+        if (requestDetails == null || isInternalRequest(requestDetails)) return;
         if (newResource instanceof Condition condition) {
             enqueueAfterCommit(condition);
         }
@@ -79,33 +82,22 @@ public class ConditionUpstreamForwardingInterceptor {
             return;
         }
 
-        String conditionId = normalizeId(condition.getIdElement() != null ? condition.getIdElement().getIdPart() : null);
-        if (conditionId == null) {
-            // Guarantee same ID upstream: only upsert conditions with an explicit local ID.
-            return;
-        }
-
-        upstreamForwarder.upsertConditions(List.of(condition));
-
         Set<String> linkedObservationIds = extractLinkedObservationIds(condition);
+        ourLog.info("Condition/{} linked observation refs extracted: {}",
+                normalizeId(condition.getIdElement() != null ? condition.getIdElement().getIdPart() : null),
+                linkedObservationIds);
         Map<String, Observation> observationsById = new LinkedHashMap<>();
 
         // Forward only observations linked from this condition.
         observationsById.putAll(readObservationsByIds(linkedObservationIds));
 
-        // Also forward vital-sign average observations for the same patient.
-        String patientId = extractPatientId(condition);
-        if (patientId != null) {
-            Patient patient = readPatientById(patientId);
-            if (patient != null) {
-                upstreamForwarder.upsertPatients(List.of(patient));
-            }
-            observationsById.putAll(loadAverageObservationsForPatient(patientId));
-        }
-
-        if (!observationsById.isEmpty()) {
-            upstreamForwarder.createObservations(new ArrayList<>(observationsById.values()));
-        }
+        // Keep condition + linked observations consistent by forwarding in one coordinated call.
+        ourLog.debug("Trigger upstream forwarding for Condition/{} with {} linked observations",
+            normalizeId(condition.getIdElement() != null ? condition.getIdElement().getIdPart() : null),
+            observationsById.size());
+        upstreamForwarder.upsertConditionsWithObservations(
+                List.of(condition),
+                observationsById.isEmpty() ? null : new ArrayList<>(observationsById.values()));
     }
 
     private IFhirResourceDao<Observation> observationDao() {
@@ -234,9 +226,22 @@ public class ConditionUpstreamForwardingInterceptor {
             ref = ref.substring(0, historyMarker);
         }
 
-        int observationIdx = ref.indexOf(OBSERVATION_PREFIX);
-        if (observationIdx >= 0) {
-            String id = ref.substring(observationIdx + OBSERVATION_PREFIX.length());
+        // Accepted reference formats:
+        // - Observation/{id}
+        // - http(s)://.../Observation/{id}
+        // - {base}/fhir/Observation/{id}
+        if (ref.startsWith(OBSERVATION_PREFIX)) {
+            String id = ref.substring(OBSERVATION_PREFIX.length());
+            int slashIdx = id.indexOf('/');
+            if (slashIdx >= 0) {
+                id = id.substring(0, slashIdx);
+            }
+            return normalizeId(id);
+        }
+
+        int pathObservationIdx = ref.indexOf("/" + OBSERVATION_PREFIX);
+        if (pathObservationIdx >= 0) {
+            String id = ref.substring(pathObservationIdx + ("/" + OBSERVATION_PREFIX).length());
             int slashIdx = id.indexOf('/');
             if (slashIdx >= 0) {
                 id = id.substring(0, slashIdx);

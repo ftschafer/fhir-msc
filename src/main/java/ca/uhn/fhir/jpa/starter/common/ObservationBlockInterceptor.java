@@ -12,7 +12,7 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 @Component
 public class ObservationBlockInterceptor {
 
-    private static final String INTERNAL_REQUEST_HEADER = "X-Internal-Request";
+    private static final String INTERNAL_REQUEST_HEADER = "X-Upstream-Internal-Request";
 
     private final ObservationEventQueue queue;
 

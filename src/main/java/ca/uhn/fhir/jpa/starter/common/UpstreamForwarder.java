@@ -3,13 +3,15 @@ package ca.uhn.fhir.jpa.starter.common;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.locks.LockSupport;
 
 import org.hl7.fhir.r4.model.Bundle;
 import org.hl7.fhir.r4.model.Condition;
-import org.hl7.fhir.r4.model.Identifier;
+import org.hl7.fhir.r4.model.DomainResource;
+import org.hl7.fhir.r4.model.Extension;
 import org.hl7.fhir.r4.model.Observation;
 import org.hl7.fhir.r4.model.Patient;
+import org.hl7.fhir.r4.model.Reference;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -18,279 +20,412 @@ import org.springframework.stereotype.Component;
 import ca.uhn.fhir.context.FhirContext;
 import ca.uhn.fhir.rest.client.api.IGenericClient;
 import ca.uhn.fhir.rest.client.interceptor.SimpleRequestHeaderInterceptor;
+import ca.uhn.fhir.rest.server.exceptions.BaseServerResponseException;
 import ca.uhn.fhir.rest.server.exceptions.ResourceVersionConflictException;
 
 @Component
 public class UpstreamForwarder {
     private static final Logger ourLog = LoggerFactory.getLogger(UpstreamForwarder.class);
-    private final IGenericClient client;
-    private final String neighborhood;
-    private final Map<String, Object> patientLocks = new ConcurrentHashMap<>();
-    private final Map<String, Object> observationLocks = new ConcurrentHashMap<>();
-    private final Map<String, Object> conditionLocks = new ConcurrentHashMap<>();
+    private static final int PATIENT_RETRY_ATTEMPTS = 6;
     private static final String LOCATION_EXTENSION_URL = "http://patient-location";
-    private static final String NEIGH_URL = "neighborhood";
-    private static final String BLOCK_URL = "block";
-    private static final int MAX_RETRIES = 3;
+    private static final String NEIGHBORHOOD_EXTENSION_URL = "neighborhood";
 
-    public UpstreamForwarder(FhirContext ctx, 
-                           @Value("${upstream.fhir.base-url:http://localhost:8082/fhir}") String upstreamUrl,
-                           @Value("${location.neighborhood:center}") String neighborhood) {
+    @Value("${location.neighborhood:center}")
+    private String neighborhoodValue;
+    
+    private final IGenericClient client;
+
+    public UpstreamForwarder(FhirContext ctx, @Value("${upstream.fhir.base-url:http://localhost:8091/fhir}") String upstreamUrl) {
         this.client = ctx.newRestfulGenericClient(upstreamUrl);
-        this.client.registerInterceptor(new SimpleRequestHeaderInterceptor("X-Internal-Request", "true"));
-        this.neighborhood = neighborhood;
+        this.client.registerInterceptor(new SimpleRequestHeaderInterceptor("X-Upstream-Internal-Request", "true"));
     }
+
 
     public void createObservations(List<Observation> observations) {
         if (observations == null || observations.isEmpty()) return;
+        ourLog.debug("Forwarding {} observation(s) upstream", observations.size());
         try {
-            Map<String, Observation> byId = new HashMap<>();
+            Bundle tx = new Bundle().setType(Bundle.BundleType.TRANSACTION);
             for (Observation o : observations) {
-                ensureNeighborhoodExtension(o);
-                // Extract block from observation location extension
-                String block = extractBlock(o);
-                if (block == null || block.isBlank()) continue;
-                String resourceId = normalizeIdPart(o.getIdElement() != null ? o.getIdElement().getIdPart() : null);
-                if (resourceId == null || resourceId.isBlank()) continue;
-                String scopedId = buildScopedId(neighborhood, block, resourceId);
+                Observation obsCopy = o.copy();
+
+                // Preserve incoming location sub-extensions (e.g., block) and ensure neighborhood is present
+                ensureNeighborhoodExtension(obsCopy);
                 
-                // Add identifier for block-scoped tracking
-                upsertIdentifier(o, "urn:observation:neigh-block-scope", scopedId);
+                Bundle.BundleEntryComponent e = tx.addEntry().setResource(obsCopy);
 
-                // Keep only the latest payload per resource ID in this call
-                byId.put(resourceId, o);
-            }
-
-            for (Map.Entry<String, Observation> entry : byId.entrySet()) {
-                String resourceId = entry.getKey();
-                Observation o = entry.getValue();
-                Object lock = observationLocks.computeIfAbsent(resourceId, k -> new Object());
-                synchronized (lock) {
-                    executeObservationUpsertWithRetry(resourceId, o);
+                String observationId = o.getIdElement() != null ? o.getIdElement().getIdPart() : null;
+                if (observationId != null && !observationId.isBlank()) {
+                    // Preserve source ID upstream to avoid collisions across layers
+                    e.getRequest().setMethod(Bundle.HTTPVerb.PUT)
+                        .setUrl("Observation/" + observationId);
+                } else {
+                    // Fallback to conditional upsert only when ID is missing
+                    String conditionalUrl;
+                    if (o.hasIdentifier() && o.getIdentifierFirstRep().hasSystem() && o.getIdentifierFirstRep().hasValue()) {
+                        conditionalUrl = "Observation?identifier=" + o.getIdentifierFirstRep().getSystem() + "|" + o.getIdentifierFirstRep().getValue();
+                    } else {
+                        StringBuilder criteria = new StringBuilder();
+                        if (o.hasSubject() && o.getSubject().hasReference()) {
+                            criteria.append("subject=").append(o.getSubject().getReference());
+                        }
+                        if (o.hasCode() && o.getCode().hasCoding() && o.getCode().getCodingFirstRep().hasCode()) {
+                            if (criteria.length() > 0) criteria.append("&");
+                            criteria.append("code=").append(o.getCode().getCodingFirstRep().getCode());
+                        }
+                        if (o.hasEffectiveDateTimeType()) {
+                            if (criteria.length() > 0) criteria.append("&");
+                            criteria.append("date=").append(o.getEffectiveDateTimeType().getValueAsString());
+                        }
+                        conditionalUrl = "Observation?" + (criteria.length() > 0 ? criteria.toString() : "identifier=temp");
+                    }
+                    e.getRequest().setMethod(Bundle.HTTPVerb.PUT)
+                        .setUrl(conditionalUrl);
                 }
             }
-        } catch (Exception ex) {
-            ourLog.warn("Failed to forward observations upstream", ex);
+            client.transaction().withBundle(tx).execute();
+        } catch (BaseServerResponseException e) {
+            ourLog.error("ERROR forwarding observations: {}", e.getMessage());
         }
     }
 
     public void upsertPatients(List<Patient> patients) {
         if (patients == null || patients.isEmpty()) return;
-        try {
-            Map<String, Patient> byId = new HashMap<>();
-            for (Patient p : patients) {
-                ensureNeighborhoodExtension(p);
-                // Extract block from patient location extension
-                String block = extractBlock(p);
-                if (block == null || block.isBlank()) continue;
-                String resourceId = normalizeIdPart(p.getIdElement() != null ? p.getIdElement().getIdPart() : null);
-                if (resourceId == null || resourceId.isBlank()) continue;
-                String scopedId = buildScopedId(neighborhood, block, resourceId);
-                
-                // Add identifier for block-scoped tracking
-                upsertIdentifier(p, "urn:patient:neigh-block-scope", scopedId);
+        ourLog.debug("Forwarding {} patient(s) upstream", patients.size());
+        int total = patients.size();
+        int successCount = 0;
 
-                // Keep only the latest payload per resource ID in this call
-                byId.put(resourceId, p);
+        for (Patient patient : patients) {
+            if (upsertPatientWithRetries(patient)) {
+                successCount++;
             }
+        }
 
-            for (Map.Entry<String, Patient> entry : byId.entrySet()) {
-                String resourceId = entry.getKey();
-                Patient p = entry.getValue();
-                Object lock = patientLocks.computeIfAbsent(resourceId, k -> new Object());
-                synchronized (lock) {
-                    executePatientUpsertWithRetry(resourceId, p);
-                }
-            }
-        } catch (Exception ex) {
-            ourLog.warn("Failed to forward patients upstream", ex);
+        if (successCount < total) {
+            ourLog.warn("Forwarded {}/{} patients upstream (some failed due to concurrent updates).", successCount, total);
+        } else {
+            ourLog.info("Forwarded {}/{} patients upstream.", successCount, total);
         }
     }
 
-    public void upsertConditions(List<Condition> conditions) {
-        if (conditions == null || conditions.isEmpty()) return;
-        try {
-            Map<String, Condition> byId = new HashMap<>();
-            for (Condition c : conditions) {
-                String resourceId = normalizeIdPart(c.getIdElement() != null ? c.getIdElement().getIdPart() : null);
-                if (resourceId == null || resourceId.isBlank()) {
-                    // To guarantee same ID upstream, we only forward Condition resources that already have IDs.
+    private boolean upsertPatientWithRetries(Patient patient) {
+        for (int attempt = 1; attempt <= PATIENT_RETRY_ATTEMPTS; attempt++) {
+            try {
+                upsertSinglePatient(patient, false);
+                return true;
+            } catch (BaseServerResponseException e) {
+                if (isVersionConflict(e) && attempt < PATIENT_RETRY_ATTEMPTS) {
+                    LockSupport.parkNanos(75L * attempt * 1_000_000L);
                     continue;
                 }
-                byId.put(resourceId, c);
-            }
 
-            for (Map.Entry<String, Condition> entry : byId.entrySet()) {
-                String resourceId = entry.getKey();
-                Condition c = entry.getValue();
-                Object lock = conditionLocks.computeIfAbsent(resourceId, k -> new Object());
-                synchronized (lock) {
-                    executeConditionUpsertWithRetry(resourceId, c);
+                // Final fallback: ID-based upsert avoids conditional collisions
+                String patientId = patient.getIdElement().getIdPart();
+                if (patientId != null && !patientId.isBlank()) {
+                    try {
+                        upsertSinglePatient(patient, true);
+                        return true;
+                    } catch (BaseServerResponseException | IllegalArgumentException | IllegalStateException fallbackException) {
+                        ourLog.warn("Failed forwarding patient {} after {} attempt(s): {}",
+                                patientId,
+                                attempt,
+                                fallbackException.getMessage());
+                        return false;
+                    }
+                }
+
+                ourLog.warn("Failed forwarding patient after {} attempt(s): {}", attempt, e.getMessage());
+                return false;
+            } catch (IllegalArgumentException | IllegalStateException e) {
+                String patientId = patient.getIdElement().getIdPart();
+                ourLog.warn("Failed forwarding patient {} after {} attempt(s): {}",
+                        patientId,
+                        attempt,
+                        e.getMessage());
+                return false;
+            }
+        }
+
+        return false;
+    }
+
+    private void upsertSinglePatient(Patient patient, boolean forceIdBased) {
+        // Preserve incoming location sub-extensions (e.g., block) and ensure neighborhood is present
+        ensureNeighborhoodExtension(patient);
+        
+        Bundle tx = new Bundle().setType(Bundle.BundleType.TRANSACTION);
+        Bundle.BundleEntryComponent entry = tx.addEntry().setResource(patient);
+
+        if (forceIdBased) {
+            String id = patient.getIdElement().getIdPart();
+            entry.getRequest().setMethod(Bundle.HTTPVerb.PUT)
+                    .setUrl("Patient/" + id);
+        } else {
+            applyPatientUpsertRequest(entry, patient);
+        }
+
+        ourLog.info("Upstream patient upsert request: method={} url={} patientId={} identifier={}",
+            entry.getRequest().getMethod(),
+            entry.getRequest().getUrl(),
+            patient.getIdElement() != null ? patient.getIdElement().getIdPart() : null,
+            (patient.hasIdentifier() && patient.getIdentifierFirstRep().hasSystem() && patient.getIdentifierFirstRep().hasValue())
+                ? patient.getIdentifierFirstRep().getSystem() + "|" + patient.getIdentifierFirstRep().getValue()
+                : "none");
+
+        client.transaction().withBundle(tx).execute();
+        ourLog.info("Upstream patient upsert succeeded: patientId={}",
+            patient.getIdElement() != null ? patient.getIdElement().getIdPart() : null);
+    }
+
+    private void applyPatientUpsertRequest(Bundle.BundleEntryComponent entry, Patient p) {
+        String id = p.getIdElement().getIdPart();
+
+        if (p.hasIdentifier() && p.getIdentifierFirstRep().hasSystem() && p.getIdentifierFirstRep().hasValue()) {
+            String system = p.getIdentifierFirstRep().getSystem();
+            String value = p.getIdentifierFirstRep().getValue();
+            entry.getRequest().setMethod(Bundle.HTTPVerb.PUT)
+                    .setUrl("Patient?identifier=" + system + "|" + value);
+        } else {
+            entry.getRequest().setMethod(Bundle.HTTPVerb.PUT)
+                    .setUrl(id != null ? "Patient/" + id : "Patient");
+        }
+    }
+
+    private boolean isVersionConflict(Throwable t) {
+        Throwable current = t;
+        while (current != null) {
+            if (current instanceof ResourceVersionConflictException) {
+                return true;
+            }
+            current = current.getCause();
+        }
+        return false;
+    }
+
+    /**
+     * Forward Condition resources to upstream server
+     * Used for auto-detected clinical conditions from CDSS
+     */
+    public void upsertConditions(List<Condition> conditions) {
+        upsertConditionsWithObservations(conditions, null);
+    }
+
+    /**
+     * Forward Condition resources along with their referenced Observations to upstream server
+     * Ensures all referenced Observations and Patients exist before creating Conditions
+     */
+    public void upsertConditionsWithObservations(List<Condition> conditions, List<Observation> observations) {
+        if (conditions == null || conditions.isEmpty()) return;
+        ourLog.debug("Forwarding {} condition(s) and {} linked observation(s) upstream",
+            conditions.size(),
+            observations == null ? 0 : observations.size());
+        try {
+            Map<String, String> oldToNewObservationIds = new HashMap<>();
+            
+            // Step 0: Collect all referenced patients from conditions and observations
+            Map<String, Patient> referencedPatients = new HashMap<>();
+            
+            // Get patients from conditions
+            for (Condition c : conditions) {
+                if (c.hasSubject() && c.getSubject().hasReference()) {
+                    String patientRef = c.getSubject().getReference();
+                    if (patientRef.startsWith("Patient/")) {
+                        String patientId = patientRef.substring("Patient/".length());
+                        if (!referencedPatients.containsKey(patientId)) {
+                            referencedPatients.put(patientId, null); // Mark for later resolution
+                        }
+                    }
                 }
             }
-        } catch (Exception ex) {
-            ourLog.warn("Failed to forward conditions upstream", ex);
+            
+            // Get patients from observations
+            if (observations != null) {
+                for (Observation obs : observations) {
+                    if (obs.hasSubject() && obs.getSubject().hasReference()) {
+                        String patientRef = obs.getSubject().getReference();
+                        if (patientRef.startsWith("Patient/")) {
+                            String patientId = patientRef.substring("Patient/".length());
+                            if (!referencedPatients.containsKey(patientId)) {
+                                referencedPatients.put(patientId, null);
+                            }
+                        }
+                    }
+                }
+            }
+            
+            ourLog.debug("Found {} unique patient references to ensure exist upstream", referencedPatients.size());
+            
+            // Step 1: Ensure all referenced patients exist upstream first
+            if (!referencedPatients.isEmpty()) {
+                Bundle patientTx = new Bundle().setType(Bundle.BundleType.TRANSACTION);
+                for (String patientId : referencedPatients.keySet()) {
+                    Bundle.BundleEntryComponent patientEntry = patientTx.addEntry();
+                    // Create-only placeholder: do NOT overwrite existing upstream patients
+                    patientEntry.setFullUrl("urn:uuid:patient-" + patientId);
+                    patientEntry.getRequest()
+                        .setMethod(Bundle.HTTPVerb.POST)
+                        .setUrl("Patient")
+                        .setIfNoneExist("_id=" + patientId);
+                    // Minimal patient placeholder only if missing upstream
+                    Patient placeholderPatient = new Patient();
+                    placeholderPatient.setId(patientId);
+                    placeholderPatient.setActive(true);
+                    patientEntry.setResource(placeholderPatient);
+                }
+                try {
+                    client.transaction().withBundle(patientTx).execute();
+                    ourLog.debug("Ensured {} patients exist upstream", referencedPatients.size());
+                } catch (BaseServerResponseException e) {
+                    ourLog.warn("Some patients may not exist upstream: {}", e.getMessage());
+                    // Continue anyway - the main transaction will fail with a clearer error if patients don't exist
+                }
+            }
+            
+            // Step 2: Post all Observations and get their new IDs
+            if (observations != null && !observations.isEmpty()) {
+                ourLog.info("Condition forwarding will upsert linked Observation IDs: {}",
+                    observations.stream()
+                        .map(o -> o.getIdElement() != null ? o.getIdElement().getIdPart() : null)
+                        .toList());
+                Bundle obsTx = new Bundle().setType(Bundle.BundleType.TRANSACTION);
+                
+                for (Observation obs : observations) {
+                    Observation obsCopy = obs.copy();
+
+                    // Preserve incoming location sub-extensions (e.g., block) and ensure neighborhood is present
+                    ensureNeighborhoodExtension(obsCopy);
+                    
+                    Bundle.BundleEntryComponent e = obsTx.addEntry().setResource(obsCopy);
+
+                    String observationId = obsCopy.getIdElement() != null ? obsCopy.getIdElement().getIdPart() : null;
+                    if (observationId != null && !observationId.isBlank()) {
+                        // Preserve source observation IDs for condition-linked references
+                        e.getRequest()
+                            .setMethod(Bundle.HTTPVerb.PUT)
+                            .setUrl("Observation/" + observationId);
+                    } else {
+                        StringBuilder criteria = new StringBuilder();
+                        if (obs.hasSubject() && obs.getSubject().hasReference()) {
+                            criteria.append("subject=").append(obs.getSubject().getReference());
+                        }
+                        if (obs.hasCode() && obs.getCode().hasCoding() && obs.getCode().getCodingFirstRep().hasCode()) {
+                            if (criteria.length() > 0) criteria.append("&");
+                            criteria.append("code=").append(obs.getCode().getCodingFirstRep().getCode());
+                        }
+                        if (obs.hasEffectiveDateTimeType()) {
+                            if (criteria.length() > 0) criteria.append("&");
+                            criteria.append("date=").append(obs.getEffectiveDateTimeType().getValueAsString());
+                        }
+
+                        e.getRequest()
+                            .setMethod(Bundle.HTTPVerb.PUT)
+                            .setUrl("Observation?" + (criteria.length() > 0 ? criteria.toString() : "identifier=temp"));
+                    }
+                }
+                
+                // Execute Observation transaction and map old IDs to new IDs
+                Bundle obsResponse = client.transaction().withBundle(obsTx).execute();
+                for (int i = 0; i < observations.size(); i++) {
+                    String oldId = observations.get(i).getIdElement().getIdPart();
+                    if (obsResponse.getEntry().size() > i && obsResponse.getEntry().get(i).hasResponse()) {
+                        String location = obsResponse.getEntry().get(i).getResponse().getLocation();
+                        if (location != null) {
+                            // Extract new ID from location header (e.g., "Observation/123/_history/1")
+                            String newId = extractIdFromLocation(location);
+                            if (newId != null) {
+                                oldToNewObservationIds.put(oldId, newId);
+                            }
+                        }
+                    }
+                }
+                ourLog.info("Posted {} observations and mapped {} IDs for condition forwarding",
+                    observations.size(),
+                    oldToNewObservationIds.size());
+            }
+            
+            // Step 3: Update Condition references and post Conditions
+            Bundle conditionTx = new Bundle().setType(Bundle.BundleType.TRANSACTION);
+            
+            for (Condition c : conditions) {
+                // Create a copy and preserve deterministic ID for stable upstream upsert
+                Condition conditionCopy = c.copy();
+
+                // Preserve incoming location sub-extensions (e.g., block) and ensure neighborhood is present
+                ensureNeighborhoodExtension(conditionCopy);
+                
+                // Update Observation references in evidence
+                if (conditionCopy.hasEvidence()) {
+                    for (Condition.ConditionEvidenceComponent evidence : conditionCopy.getEvidence()) {
+                        for (Reference ref : evidence.getDetail()) {
+                            if (ref.getReference() != null && ref.getReference().startsWith("Observation/")) {
+                                String oldObsId = ref.getReference().substring("Observation/".length());
+                                String newObsId = oldToNewObservationIds.get(oldObsId);
+                                if (newObsId != null) {
+                                    ref.setReference("Observation/" + newObsId);
+                                }
+                            }
+                        }
+                    }
+                }
+                
+                Bundle.BundleEntryComponent e = conditionTx.addEntry().setResource(conditionCopy);
+
+                String conditionId = conditionCopy.getIdElement().getIdPart();
+                if (conditionId != null && !conditionId.isBlank()) {
+                    // Stable ID-based upsert
+                    e.getRequest()
+                        .setMethod(Bundle.HTTPVerb.PUT)
+                        .setUrl("Condition/" + conditionId);
+                } else {
+                    // Fallback conditional upsert
+                    String patientRef = c.getSubject().getReference();
+                    String code = c.getCode().getCodingFirstRep().getCode();
+                    e.getRequest()
+                        .setMethod(Bundle.HTTPVerb.PUT)
+                        .setUrl("Condition?patient=" + patientRef + "&code=" + code + "&clinical-status=active");
+                }
+            }
+            
+            client.transaction().withBundle(conditionTx).execute();
+            
+        } catch (BaseServerResponseException e) {
+            ourLog.error("ERROR forwarding conditions: {}", e.getMessage());
+            throw new RuntimeException("Failed to forward conditions", e);
         }
     }
 
-    private void executePatientUpsertWithRetry(String resourceId, Patient patient) {
-        int attempts = 0;
-        while (attempts < MAX_RETRIES) {
-            attempts++;
-            try {
-                Bundle tx = new Bundle().setType(Bundle.BundleType.TRANSACTION);
-                Patient outbound = (Patient) patient.copy();
-                outbound.setId("Patient/" + resourceId);
-                Bundle.BundleEntryComponent e = tx.addEntry().setResource(outbound);
-                e.getRequest().setMethod(Bundle.HTTPVerb.PUT)
-                    .setUrl("Patient/" + resourceId);
-                client.transaction().withBundle(tx).execute();
-                return;
-            } catch (ResourceVersionConflictException ex) {
-                if (attempts >= MAX_RETRIES) return;
-                sleepBackoff(attempts);
-            } catch (Exception ex) {
-                return;
+    private void ensureNeighborhoodExtension(DomainResource resource) {
+        Extension existingLocation = resource.getExtensionByUrl(LOCATION_EXTENSION_URL);
+
+        Extension rebuiltLocation = new Extension().setUrl(LOCATION_EXTENSION_URL);
+        if (existingLocation != null && existingLocation.hasExtension()) {
+            for (Extension nested : existingLocation.getExtension()) {
+                if (NEIGHBORHOOD_EXTENSION_URL.equals(nested.getUrl())) {
+                    continue;
+                }
+                rebuiltLocation.addExtension(nested.copy());
             }
         }
-    }
 
-    private void executeObservationUpsertWithRetry(String resourceId, Observation observation) {
-        int attempts = 0;
-        while (attempts < MAX_RETRIES) {
-            attempts++;
-            try {
-                Bundle tx = new Bundle().setType(Bundle.BundleType.TRANSACTION);
-                Observation outbound = (Observation) observation.copy();
-                outbound.setId("Observation/" + resourceId);
-                Bundle.BundleEntryComponent e = tx.addEntry().setResource(outbound);
-                e.getRequest().setMethod(Bundle.HTTPVerb.PUT)
-                    .setUrl("Observation/" + resourceId);
-                client.transaction().withBundle(tx).execute();
-                return;
-            } catch (ResourceVersionConflictException ex) {
-                if (attempts >= MAX_RETRIES) return;
-                sleepBackoff(attempts);
-            } catch (Exception ex) {
-                return;
-            }
-        }
-    }
+        rebuiltLocation.addExtension(new Extension()
+                .setUrl(NEIGHBORHOOD_EXTENSION_URL)
+                .setValue(new org.hl7.fhir.r4.model.StringType(neighborhoodValue)));
 
-    private void executeConditionUpsertWithRetry(String resourceId, Condition condition) {
-        int attempts = 0;
-        while (attempts < MAX_RETRIES) {
-            attempts++;
-            try {
-                Bundle tx = new Bundle().setType(Bundle.BundleType.TRANSACTION);
-                Condition outbound = (Condition) condition.copy();
-                outbound.setId("Condition/" + resourceId);
-                Bundle.BundleEntryComponent e = tx.addEntry().setResource(outbound);
-                e.getRequest().setMethod(Bundle.HTTPVerb.PUT)
-                    .setUrl("Condition/" + resourceId);
-                client.transaction().withBundle(tx).execute();
-                return;
-            } catch (ResourceVersionConflictException ex) {
-                if (attempts >= MAX_RETRIES) return;
-                sleepBackoff(attempts);
-            } catch (Exception ex) {
-                return;
-            }
-        }
-    }
-
-    private void sleepBackoff(int attempt) {
-        try {
-            long delayMs = 50L * attempt;
-            Thread.sleep(delayMs);
-        } catch (InterruptedException ie) {
-            Thread.currentThread().interrupt();
-        }
+        resource.getExtension().removeIf(ext -> LOCATION_EXTENSION_URL.equals(ext.getUrl()));
+        resource.addExtension(rebuiltLocation);
     }
     
-    private String buildScopedId(String neighborhood, String block, String resourceId) {
-        return neighborhood + "-" + block + "-" + resourceId;
-    }
-
-    private String normalizeIdPart(String idPart) {
-        if (idPart == null) return null;
-        String id = idPart.trim();
-        if (id.isEmpty()) return null;
-        int historyMarker = id.indexOf("/_history/");
-        if (historyMarker > 0) {
-            id = id.substring(0, historyMarker);
-        }
-        return id;
-    }
-    
-    private String extractBlock(org.hl7.fhir.r4.model.Resource resource) {
-        org.hl7.fhir.r4.model.Extension locExt = null;
-        if (resource instanceof Patient) {
-            locExt = ((Patient) resource).getExtensionByUrl(LOCATION_EXTENSION_URL);
-        } else if (resource instanceof Observation) {
-            locExt = ((Observation) resource).getExtensionByUrl(LOCATION_EXTENSION_URL);
-        }
-        
-        if (locExt != null) {
-            org.hl7.fhir.r4.model.Extension blockExt = locExt.getExtension().stream()
-                .filter(e -> BLOCK_URL.equals(e.getUrl()))
-                .findFirst().orElse(null);
-            if (blockExt != null && blockExt.getValue() != null) {
-                return blockExt.getValue().primitiveValue();
-            }
+    /**
+     * Extract resource ID from location header
+     * Example: "Observation/123/_history/1" -> "123"
+     */
+    private String extractIdFromLocation(String location) {
+        if (location == null) return null;
+        // Location format: "ResourceType/id/_history/version" or "ResourceType/id"
+        String[] parts = location.split("/");
+        if (parts.length >= 2) {
+            return parts[1]; // Return the ID part
         }
         return null;
-    }
-
-    private void ensureNeighborhoodExtension(org.hl7.fhir.r4.model.Resource resource) {
-        org.hl7.fhir.r4.model.Extension locExt = null;
-        if (resource instanceof Patient) {
-            locExt = ((Patient) resource).getExtensionByUrl(LOCATION_EXTENSION_URL);
-        } else if (resource instanceof Observation) {
-            locExt = ((Observation) resource).getExtensionByUrl(LOCATION_EXTENSION_URL);
-        }
-        if (locExt == null) {
-            return;
-        }
-
-        boolean hasBlock = locExt.getExtension().stream()
-            .anyMatch(e -> BLOCK_URL.equals(e.getUrl()) && e.getValue() != null);
-        if (!hasBlock) {
-            return;
-        }
-
-        boolean hasNeighborhood = locExt.getExtension().stream()
-            .anyMatch(e -> NEIGH_URL.equals(e.getUrl()) && e.getValue() != null);
-        if (!hasNeighborhood) {
-            locExt.addExtension(new org.hl7.fhir.r4.model.Extension()
-                .setUrl(NEIGH_URL)
-                .setValue(new org.hl7.fhir.r4.model.StringType(neighborhood)));
-        }
-    }
-
-    private void upsertIdentifier(org.hl7.fhir.r4.model.DomainResource resource, String system, String value) {
-        List<Identifier> identifiers = null;
-        if (resource instanceof Patient) {
-            identifiers = ((Patient) resource).getIdentifier();
-        } else if (resource instanceof Observation) {
-            identifiers = ((Observation) resource).getIdentifier();
-        }
-        
-        if (identifiers == null) return;
-        
-        Identifier existing = identifiers.stream()
-            .filter(i -> system.equals(i.getSystem()))
-            .findFirst()
-            .orElse(null);
-        if (existing != null) {
-            existing.setValue(value);
-        } else {
-            Identifier newId = new Identifier().setSystem(system).setValue(value);
-            if (resource instanceof Patient) {
-                ((Patient) resource).addIdentifier(newId);
-            } else if (resource instanceof Observation) {
-                ((Observation) resource).addIdentifier(newId);
-            }
-        }
     }
 }

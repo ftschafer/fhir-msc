@@ -292,6 +292,7 @@ public class StarterJpaConfig {
 			PatientBlockInterceptor patientBlockInterceptor,		
 			LocationExtensionInterceptor locationExtensionInterceptor,			
 			PatientUpstreamForwardingInterceptor patientUpstreamForwardingInterceptor,
+			ObservationUpstreamForwardingInterceptor observationUpstreamForwardingInterceptor,
 			ConditionUpstreamForwardingInterceptor conditionUpstreamForwardingInterceptor,
 			Optional<GraphQLProvider> graphQLProvider,
 			BulkDataExportProvider bulkDataExportProvider,
@@ -332,6 +333,7 @@ public class StarterJpaConfig {
 		fhirServer.registerInterceptor(patientBlockInterceptor);
 		fhirServer.registerInterceptor(locationExtensionInterceptor);
 		fhirServer.registerInterceptor(patientUpstreamForwardingInterceptor);
+		fhirServer.registerInterceptor(observationUpstreamForwardingInterceptor);
 		fhirServer.registerInterceptor(conditionUpstreamForwardingInterceptor);
 		fhirServer.setServerConformanceProvider(calculateConformanceProvider(
 				fhirSystemDao, fhirServer, jpaStorageSettings, searchParamRegistry, theValidationSupport));

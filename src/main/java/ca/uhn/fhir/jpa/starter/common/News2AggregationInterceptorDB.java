@@ -30,7 +30,7 @@ public class News2AggregationInterceptorDB {
     private static final Logger logger = LoggerFactory.getLogger(News2AggregationInterceptorDB.class);
 
     private static final String TX_OBS_KEY = News2AggregationInterceptorDB.class.getName() + ".OBS_SET";
-    private static final String INTERNAL_REQUEST_HEADER = "X-Internal-Request";
+    private static final String INTERNAL_REQUEST_HEADER = "X-Upstream-Internal-Request";
 
     // Use the same extension URL as PatientTotalNews2ScoreInterceptor
     private static final String NEWS2_EXTENSION_URL = "http://news2-score";

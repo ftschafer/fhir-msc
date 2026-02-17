@@ -283,8 +283,9 @@ hapi:
     #      name: fhirtest.access
     #    max_binary_size: 104857600
     #    max_page_size: 200
-    #    retain_cached_searches_mins: 60
-    #    reuse_cached_search_results_millis: 60000
+    # keep search cache retained if needed, but disable reuse of stale cached result sets
+    retain_cached_searches_mins: 60
+    reuse_cached_search_results_millis: 0
     tester:
       home:
         name: Local Tester

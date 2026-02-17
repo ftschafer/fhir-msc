@@ -339,8 +339,9 @@ hapi:
     #      name: fhirtest.access
     #    max_binary_size: 104857600
     #    max_page_size: 200
-    #    retain_cached_searches_mins: 60
-    #    reuse_cached_search_results_millis: 60000
+    # keep search cache retained if needed, but disable reuse of stale cached result sets
+    retain_cached_searches_mins: 60
+    reuse_cached_search_results_millis: 0
     # The remote_terminology_service block is commented out by default because it requires external terminology service endpoints.
     # Uncomment and configure the block below if you need to enable remote terminology validation or mapping.
     #remote_terminology_service:
@@ -406,6 +407,9 @@ hapi:
 upstream:
   fhir:
     base-url: http://localhost:8091/fhir
+  forward:
+    batch-size: 400
+    flush-delay-ms: 10
 
 logging:
   level:
