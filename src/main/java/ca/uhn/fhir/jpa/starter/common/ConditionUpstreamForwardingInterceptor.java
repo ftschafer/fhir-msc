@@ -49,16 +49,26 @@ public class ConditionUpstreamForwardingInterceptor {
 
     @Hook(Pointcut.STORAGE_PRECOMMIT_RESOURCE_CREATED)
     public void created(IBaseResource resource, RequestDetails requestDetails) {
-        if (requestDetails == null || isInternalRequest(requestDetails)) return;
+        if (isInternalRequest(requestDetails)) {
+            ourLog.info("Skipping internal condition create forwarding");
+            return;
+        }
         if (resource instanceof Condition condition) {
+            ourLog.info("Condition create detected for upstream forwarding: Condition/{}",
+                    normalizeId(condition.getIdElement() != null ? condition.getIdElement().getIdPart() : null));
             enqueueAfterCommit(condition);
         }
     }
 
     @Hook(Pointcut.STORAGE_PRECOMMIT_RESOURCE_UPDATED)
     public void updated(IBaseResource oldResource, IBaseResource newResource, RequestDetails requestDetails) {
-        if (requestDetails == null || isInternalRequest(requestDetails)) return;
+        if (isInternalRequest(requestDetails)) {
+            ourLog.info("Skipping internal condition update forwarding");
+            return;
+        }
         if (newResource instanceof Condition condition) {
+            ourLog.info("Condition update detected for upstream forwarding: Condition/{}",
+                    normalizeId(condition.getIdElement() != null ? condition.getIdElement().getIdPart() : null));
             enqueueAfterCommit(condition);
         }
     }
@@ -69,11 +79,29 @@ public class ConditionUpstreamForwardingInterceptor {
             TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
                 @Override
                 public void afterCommit() {
-                    forwardConditionWithLinkedData(copy);
+                    try {
+                        ourLog.info("After-commit condition forwarding: Condition/{}",
+                                normalizeId(copy.getIdElement() != null ? copy.getIdElement().getIdPart() : null));
+                        forwardConditionWithLinkedData(copy);
+                    } catch (RuntimeException e) {
+                        ourLog.error("Condition forwarding failed after commit for Condition/{}: {}",
+                                normalizeId(copy.getIdElement() != null ? copy.getIdElement().getIdPart() : null),
+                                e.getMessage(),
+                                e);
+                    }
                 }
             });
         } else {
-            forwardConditionWithLinkedData(copy);
+            try {
+                ourLog.info("Immediate condition forwarding (no transaction sync): Condition/{}",
+                        normalizeId(copy.getIdElement() != null ? copy.getIdElement().getIdPart() : null));
+                forwardConditionWithLinkedData(copy);
+            } catch (RuntimeException e) {
+                ourLog.error("Immediate condition forwarding failed for Condition/{}: {}",
+                        normalizeId(copy.getIdElement() != null ? copy.getIdElement().getIdPart() : null),
+                        e.getMessage(),
+                        e);
+            }
         }
     }
 
