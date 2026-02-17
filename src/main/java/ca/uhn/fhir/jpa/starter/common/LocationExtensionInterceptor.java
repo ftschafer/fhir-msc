@@ -3,6 +3,9 @@ package ca.uhn.fhir.jpa.starter.common;
 import ca.uhn.fhir.interceptor.api.Hook;
 import ca.uhn.fhir.interceptor.api.Interceptor;
 import ca.uhn.fhir.interceptor.api.Pointcut;
+import ca.uhn.fhir.context.FhirContext;
+import ca.uhn.fhir.jpa.api.dao.DaoRegistry;
+import ca.uhn.fhir.jpa.api.dao.IFhirResourceDao;
 import ca.uhn.fhir.rest.api.server.RequestDetails;
 import org.hl7.fhir.instance.model.api.IBaseResource;
 import org.hl7.fhir.r4.model.Condition;
@@ -28,6 +31,14 @@ public class LocationExtensionInterceptor {
     @Value("${location.city}")
     private String cityValue;
 
+    private final FhirContext fhirContext;
+    private final IFhirResourceDao<Patient> patientDao;
+
+    public LocationExtensionInterceptor(FhirContext fhirContext, DaoRegistry daoRegistry) {
+        this.fhirContext = fhirContext;
+        this.patientDao = daoRegistry.getResourceDao(Patient.class);
+    }
+
     @Hook(Pointcut.STORAGE_PRESTORAGE_RESOURCE_CREATED)
     public void handleCreate(IBaseResource resource, RequestDetails requestDetails) {
         if (isInternalRequest(requestDetails)) return;
@@ -42,28 +53,114 @@ public class LocationExtensionInterceptor {
 
     private void ensureCityExtension(IBaseResource resource) {
         if (resource instanceof Patient patient) {
-            ensureCity(patient.getExtensionByUrl(LOCATION_EXTENSION_URL));
+            ensureLocation(patient, patient.getExtensionByUrl(LOCATION_EXTENSION_URL));
         } else if (resource instanceof Observation observation) {
-            ensureCity(observation.getExtensionByUrl(LOCATION_EXTENSION_URL));
+            ensureLocation(observation, observation.getExtensionByUrl(LOCATION_EXTENSION_URL));
         } else if (resource instanceof Condition condition) {
-            ensureCity(condition.getExtensionByUrl(LOCATION_EXTENSION_URL));
+            ensureLocation(condition, condition.getExtensionByUrl(LOCATION_EXTENSION_URL));
         }
     }
 
-    private void ensureCity(Extension locationExt) {
-        if (locationExt == null) return;
+    private void ensureLocation(org.hl7.fhir.r4.model.Resource resource, Extension locationExt) {
+        if (locationExt == null) {
+            locationExt = new Extension(LOCATION_EXTENSION_URL);
+            if (resource instanceof Patient patient) {
+                patient.addExtension(locationExt);
+            } else if (resource instanceof Observation observation) {
+                observation.addExtension(locationExt);
+            } else if (resource instanceof Condition condition) {
+                condition.addExtension(locationExt);
+            }
+        }
 
-        boolean hasBlock = locationExt.getExtension().stream()
-                .anyMatch(e -> BLOCK_URL.equals(e.getUrl()) && e.getValue() != null);
-        if (!hasBlock) return;
+        String block = nested(locationExt, BLOCK_URL);
+        String neighborhood = nested(locationExt, "neighborhood");
 
-        boolean hasCity = locationExt.getExtension().stream()
-                .anyMatch(e -> CITY_URL.equals(e.getUrl()) && e.getValue() != null);
+        if ((block == null || block.isBlank()) || (neighborhood == null || neighborhood.isBlank())) {
+            LocationParts fromPatient = extractFromSubjectPatient(resource);
+            if (fromPatient != null) {
+                if ((block == null || block.isBlank()) && fromPatient.block != null && !fromPatient.block.isBlank()) {
+                    upsertNested(locationExt, BLOCK_URL, fromPatient.block);
+                    block = fromPatient.block;
+                }
+                if ((neighborhood == null || neighborhood.isBlank()) && fromPatient.neighborhood != null && !fromPatient.neighborhood.isBlank()) {
+                    upsertNested(locationExt, "neighborhood", fromPatient.neighborhood);
+                }
+                if (fromPatient.city != null && !fromPatient.city.isBlank()) {
+                    upsertNested(locationExt, CITY_URL, fromPatient.city);
+                }
+            }
+        }
 
-        if (!hasCity) {
-            locationExt.addExtension(new Extension()
-                    .setUrl(CITY_URL)
-                    .setValue(new StringType(cityValue)));
+        if (nested(locationExt, BLOCK_URL) == null || nested(locationExt, BLOCK_URL).isBlank()) return;
+
+        if (nested(locationExt, CITY_URL) == null || nested(locationExt, CITY_URL).isBlank()) {
+            upsertNested(locationExt, CITY_URL, cityValue);
+        }
+    }
+
+    private String nested(Extension locationExt, String url) {
+        if (locationExt == null || locationExt.getExtension() == null) return null;
+        Extension nested = locationExt.getExtension().stream()
+                .filter(e -> e != null && url.equals(e.getUrl()) && e.getValue() != null)
+                .findFirst()
+                .orElse(null);
+        return nested == null ? null : nested.getValue().primitiveValue();
+    }
+
+    private void upsertNested(Extension locationExt, String url, String value) {
+        if (locationExt == null || value == null || value.isBlank()) return;
+        Extension nested = locationExt.getExtension().stream()
+                .filter(e -> e != null && url.equals(e.getUrl()))
+                .findFirst()
+                .orElse(null);
+        if (nested == null) {
+            locationExt.addExtension(new Extension().setUrl(url).setValue(new StringType(value)));
+        } else {
+            nested.setValue(new StringType(value));
+        }
+    }
+
+    private LocationParts extractFromSubjectPatient(org.hl7.fhir.r4.model.Resource resource) {
+        String subjectId = null;
+        if (resource instanceof Observation observation
+                && observation.getSubject() != null
+                && observation.getSubject().getReferenceElement() != null) {
+            subjectId = observation.getSubject().getReferenceElement().getIdPart();
+        } else if (resource instanceof Condition condition
+                && condition.getSubject() != null
+                && condition.getSubject().getReferenceElement() != null) {
+            subjectId = condition.getSubject().getReferenceElement().getIdPart();
+        }
+
+        if (subjectId == null || subjectId.isBlank()) return null;
+
+        try {
+            Patient patient = patientDao.read(fhirContext.getVersion().newIdType("Patient", subjectId), null);
+            if (patient == null) return null;
+
+            Extension loc = patient.getExtensionByUrl(LOCATION_EXTENSION_URL);
+            if (loc == null) return null;
+
+            String pBlock = nested(loc, BLOCK_URL);
+            String pNeighborhood = nested(loc, "neighborhood");
+            String pCity = nested(loc, CITY_URL);
+
+            return new LocationParts(pCity, pNeighborhood, pBlock);
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
+    private static class LocationParts {
+        private final String city;
+        private final String neighborhood;
+        private final String block;
+
+        private LocationParts(String city, String neighborhood, String block) {
+            this.city = city;
+            this.neighborhood = neighborhood;
+            this.block = block;
         }
     }
 

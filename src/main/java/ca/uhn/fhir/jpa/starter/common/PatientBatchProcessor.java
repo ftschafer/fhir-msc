@@ -10,6 +10,7 @@ import java.util.List;
 public class PatientBatchProcessor {
 
     private static final int BATCH_SIZE = 200;
+    private static final int MAX_DRAINS_PER_RUN = 20;
 
     private final PatientEventQueue queue;
     private final CityNews2AggregationService cityService;
@@ -20,16 +21,19 @@ public class PatientBatchProcessor {
         this.cityService = cityService;
     }
 
-    @Scheduled(fixedDelay = 200)
+    @Scheduled(fixedDelayString = "${aggregation.patient.fixed-delay-ms:50}")
     @Transactional
     public void process() {
-        if (queue.isEmpty()) return;
-        List<Patient> patients = queue.drain(BATCH_SIZE);
-        if (patients.isEmpty()) return;
-        for (Patient p : patients) {
-            if (p.getIdElement() != null && p.getIdElement().hasIdPart()) {
-                cityService.updateCityForPatient(p.getIdElement().getIdPart());
+        int drains = 0;
+        while (!queue.isEmpty() && drains < MAX_DRAINS_PER_RUN) {
+            List<Patient> patients = queue.drain(BATCH_SIZE);
+            if (patients.isEmpty()) return;
+            for (Patient p : patients) {
+                if (p.getIdElement() != null && p.getIdElement().hasIdPart()) {
+                    cityService.updateCityForPatient(p.getIdElement().getIdPart());
+                }
             }
+            drains++;
         }
     }
 }

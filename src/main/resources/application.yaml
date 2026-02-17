@@ -99,7 +99,13 @@ spring:
 
 # Location extension defaults
 location:
-  city: 91
+  city: C91
+
+aggregation:
+  patient:
+    fixed-delay-ms: 50
+  observation:
+    fixed-delay-ms: 50
 hapi:
   fhir:
     ### This flag when enabled to true, will avail evaluate measure operations from CR Module.
@@ -285,6 +291,8 @@ hapi:
       ### Request tenant mode can be used for a multi-tenancy setup where the request path is
       ###    expected to have an additional path element, e.g. GET http://example.com/fhir/TENANT-ID/Patient/A
     #  request_tenant_partitioning_mode: false
+    retain_cached_searches_mins: 60
+    reuse_cached_search_results_millis: 0
 
     cors:
       allow_Credentials: true

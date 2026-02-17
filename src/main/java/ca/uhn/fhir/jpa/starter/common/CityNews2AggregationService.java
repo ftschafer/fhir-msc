@@ -15,6 +15,8 @@ import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 import jakarta.annotation.PostConstruct;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.Date;
 import java.util.List;
@@ -23,6 +25,8 @@ import java.util.Optional;
 
 @Service
 public class CityNews2AggregationService {
+
+    private static final Logger ourLog = LoggerFactory.getLogger(CityNews2AggregationService.class);
 
     // ------------------------
     // Metric names
@@ -188,6 +192,11 @@ public class CityNews2AggregationService {
         neighborhood = normalize(neighborhood);
         block = normalize(block);
 
+        if (block == null) {
+            ourLog.debug("Skipping patient {} aggregation because block is missing", patientId);
+            return;
+        }
+
         Extension news2Ext = patient.getExtensionByUrl(NEWS2_EXTENSION_URL);
         int newScore = (news2Ext != null && news2Ext.getValue() instanceof IntegerType)
                 ? ((IntegerType) news2Ext.getValue()).getValue()
@@ -197,13 +206,23 @@ public class CityNews2AggregationService {
         Integer oldScore = pb == null ? null : pb.getLastScore();
         boolean moved = pb != null && !Objects.equals(oldBlock, block);
 
+        // Domain invariant: patients do not move between locations.
+        // If a different block arrives, keep the original block to avoid cross-location drift.
+        if (moved && oldBlock != null) {
+            ourLog.warn("Ignoring location move for patient {} ({} -> {}), keeping original block", patientId, oldBlock, block);
+            block = oldBlock;
+            moved = false;
+        }
+
         if (pb == null) {
             pb = new PatientBlock(patientId, block, newScore);
             pb.setLastUpdated(patientLastUpdated);
             em.persist(pb);
             adjustBlock(city, neighborhood, block, newScore, 1);
         } else if (moved) {
-            if (oldScore != null) adjustBlock(city, oldBlock, null, -oldScore, -1);
+            if (oldScore != null && oldBlock != null) {
+                adjustBlock(city, neighborhood, oldBlock, -oldScore, -1);
+            }
             pb.update(block, newScore);
             pb.setLastUpdated(patientLastUpdated);
             em.merge(pb);
@@ -217,6 +236,12 @@ public class CityNews2AggregationService {
         }
 
         em.flush();
+
+            // Forward every successfully processed patient upstream.
+            // If city was just added, forwarding is already scheduled in ensureCityIfMissing().
+            if (!patientMutated) {
+                scheduleUpstreamForwardAfterCommit((Patient) patient.copy());
+            }
         
             updateSuccess = true;
             meterRegistry.counter(METRIC_PATIENT_UPDATE_SUCCESS).increment();
@@ -250,22 +275,27 @@ public class CityNews2AggregationService {
 
             patientDao().update(patient);
 
-            Patient copy = (Patient) patient.copy();
+            scheduleUpstreamForwardAfterCommit((Patient) patient.copy());
+            return true;
+        }
+        return false;
+    }
 
-            TransactionSynchronizationManager.registerSynchronization(
+    private void scheduleUpstreamForwardAfterCommit(Patient patientCopy) {
+        if (patientCopy == null || upstreamForwarder == null) {
+            return;
+        }
+
+        TransactionSynchronizationManager.registerSynchronization(
                 new TransactionSynchronization() {
                     @Override
                     public void afterCommit() {
                         Runnable task = () -> {
                             Timer.Sample asyncSample = Timer.start(meterRegistry);
                             try {
-                                if (upstreamForwarder != null) {
-                                    upstreamForwarder.upsertPatients(List.of(copy));
-                                }
+                                upstreamForwarder.upsertPatients(List.of(patientCopy));
                             } finally {
-                                asyncSample.stop(
-                                    meterRegistry.timer(METRIC_UPSTREAM)
-                                );
+                                asyncSample.stop(meterRegistry.timer(METRIC_UPSTREAM));
                             }
                         };
 
@@ -276,14 +306,16 @@ public class CityNews2AggregationService {
                         }
                     }
                 }
-            );
-            return true;
-        }
-        return false;
+        );
     }
 
     private void adjustBlock(String city, String neighborhood, String block,
                              int scoreDelta, int patientDelta) {
+
+        if (block == null || block.isBlank()) {
+            ourLog.debug("Skipping adjustBlock because block is missing (city={}, neighborhood={})", city, neighborhood);
+            return;
+        }
 
         Timer.Sample upsertSample = Timer.start(meterRegistry);
         try {

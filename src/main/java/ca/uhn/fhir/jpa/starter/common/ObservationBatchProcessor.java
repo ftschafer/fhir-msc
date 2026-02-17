@@ -11,6 +11,7 @@ import java.util.Set;
 public class ObservationBatchProcessor {
 
     private static final int BATCH_SIZE = 200;
+    private static final int MAX_DRAINS_PER_RUN = 20;
 
     private final ObservationEventQueue queue;
     private final News2AggregationService news2Service;
@@ -24,13 +25,16 @@ public class ObservationBatchProcessor {
         this.cityService = cityService;
     }
 
-    @Scheduled(fixedDelay = 200) // adjust for throughput/latency
+    @Scheduled(fixedDelayString = "${aggregation.observation.fixed-delay-ms:50}") // adjust for throughput/latency
     @Transactional
     public void process() {
-        if (queue.isEmpty()) return;
-        List<Observation> obs = queue.drain(BATCH_SIZE);
-        if (obs.isEmpty()) return;
-        Set<String> patients = news2Service.processBundleObservationsReturningPatients(obs);
-        patients.forEach(cityService::updateCityForPatient);
+        int drains = 0;
+        while (!queue.isEmpty() && drains < MAX_DRAINS_PER_RUN) {
+            List<Observation> obs = queue.drain(BATCH_SIZE);
+            if (obs.isEmpty()) return;
+            Set<String> patients = news2Service.processBundleObservationsReturningPatients(obs);
+            patients.forEach(cityService::updateCityForPatient);
+            drains++;
+        }
     }
 }
