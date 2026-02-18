@@ -19,6 +19,8 @@ import org.hl7.fhir.r4.model.Observation;
 import org.hl7.fhir.r4.model.Patient;
 import org.hl7.fhir.r4.model.Quantity;
 import org.hl7.fhir.r4.model.StringType;
+import org.hl7.fhir.r4.model.Identifier;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
@@ -27,6 +29,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.io.IOException;
 
 /**
  * City-level dashboard endpoint.
@@ -43,6 +46,9 @@ public class DashboardProvider implements IResourceProvider {
 
     @SuppressWarnings("unused")
     private final DaoRegistry daoRegistry;
+
+    @Value("${location.city:C91}")
+    private String defaultCity;
 
     public DashboardProvider(DaoRegistry daoRegistry) {
         this.daoRegistry = daoRegistry;
@@ -62,14 +68,9 @@ public class DashboardProvider implements IResourceProvider {
             String cityFilter = cityParam != null ? normalize(cityParam.getValue()) : null;
             Map<String, Object> payload = buildDashboard(cityFilter);
             writeJson(response, payload);
-        } catch (Exception e) {
-            try {
-                response.setStatus(500);
-                response.setContentType("application/json");
-                response.getWriter().write("{\"error\":\"" + escapeJson(e.getMessage()) + "\"}");
-            } catch (Exception ignored) {
-                // no-op
-            }
+        } catch (IOException | RuntimeException e) {
+            response.setStatus(500);
+            response.setContentType("application/json");
         }
     }
 
@@ -137,8 +138,37 @@ public class DashboardProvider implements IResourceProvider {
         return payload;
     }
 
+    @SuppressWarnings("deprecation")
     private PatientStats collectPatientStats(String cityFilter) {
         PatientStats out = new PatientStats();
+
+        Map<String, Integer> fallbackScores = new HashMap<>();
+        List<Object[]> scoreRows = em.createQuery(
+                "SELECT pb.patientId, pb.lastScore FROM PatientBlock pb",
+                Object[].class
+        ).getResultList();
+        for (Object[] row : scoreRows) {
+            String pid = asString(row[0]);
+            Integer s = row[1] == null ? null : ((Number) row[1]).intValue();
+            if (pid != null && !pid.isBlank() && s != null) {
+                fallbackScores.put(pid, s);
+            }
+        }
+
+        Map<String, String> neighborhoodByCityBlock = new HashMap<>();
+        List<Object[]> blockRows = em.createQuery(
+                "SELECT b.id.city, b.id.block, b.id.neighborhood FROM BlockNews2Aggregate b",
+                Object[].class
+        ).getResultList();
+        for (Object[] row : blockRows) {
+            String city = normalize(asString(row[0]));
+            String block = normalize(asString(row[1]));
+            String neighborhood = normalize(asString(row[2]));
+            if (city != null && block != null && neighborhood != null) {
+                neighborhoodByCityBlock.put(city + "|" + block, neighborhood);
+            }
+        }
+
         IFhirResourceDao<Patient> patientDao = daoRegistry.getResourceDao(Patient.class);
         SearchParameterMap patientSearch = new SearchParameterMap();
         patientSearch.setLoadSynchronous(true);
@@ -147,28 +177,49 @@ public class DashboardProvider implements IResourceProvider {
         for (IBaseResource resource : patients) {
             if (!(resource instanceof Patient patient)) continue;
 
-            String city = extractLocationNested(patient, "city");
-            String neighborhood = extractLocationNested(patient, "neighborhood");
-            String block = extractLocationNested(patient, "block");
+            LocationTuple location = resolvePatientLocation(patient);
+            String city = location.city;
+            String neighborhood = location.neighborhood;
+            String block = location.block;
 
-            if (block == null || block.isBlank()) continue;
+            if ((neighborhood == null || neighborhood.isBlank()) && city != null && block != null) {
+                neighborhood = neighborhoodByCityBlock.get(city + "|" + block);
+            }
+
             if (cityFilter != null && (city == null || !cityFilter.equalsIgnoreCase(city))) continue;
 
-            int score = extractPatientNews2Score(patient);
+            int score = extractPatientNews2Score(patient, fallbackScores);
             out.totalPatients++;
             out.totalScore += score;
 
-            CityAccumulator c = out.cityAcc.computeIfAbsent(asString(city), k -> new CityAccumulator(city));
+            String cityKey = asString(city);
+            CityAccumulator c = out.cityAcc.get(cityKey);
+            if (c == null) {
+                c = new CityAccumulator(city);
+                out.cityAcc.put(cityKey, c);
+            }
             c.patientCount++;
             c.totalScore += score;
 
+            if (block == null || block.isBlank()) {
+                continue;
+            }
+
             String nKey = key(city, neighborhood, "");
-            NeighborhoodAccumulator n = out.neighborhoodAcc.computeIfAbsent(nKey, k -> new NeighborhoodAccumulator(city, neighborhood));
+            NeighborhoodAccumulator n = out.neighborhoodAcc.get(nKey);
+            if (n == null) {
+                n = new NeighborhoodAccumulator(city, neighborhood);
+                out.neighborhoodAcc.put(nKey, n);
+            }
             n.patientCount++;
             n.totalScore += score;
 
             String bKey = key(city, neighborhood, block);
-            BlockAccumulator b = out.blockAcc.computeIfAbsent(bKey, k -> new BlockAccumulator(city, neighborhood, block));
+            BlockAccumulator b = out.blockAcc.get(bKey);
+            if (b == null) {
+                b = new BlockAccumulator(city, neighborhood, block);
+                out.blockAcc.put(bKey, b);
+            }
             b.patientCount++;
             b.totalScore += score;
         }
@@ -176,16 +227,22 @@ public class DashboardProvider implements IResourceProvider {
         return out;
     }
 
-    private int extractPatientNews2Score(Patient patient) {
+    private int extractPatientNews2Score(Patient patient, Map<String, Integer> fallbackScores) {
         if (patient == null) return 0;
         Extension ext = patient.getExtensionByUrl("http://news2-score");
         if (ext != null && ext.getValue() instanceof IntegerType it && it.getValue() != null) {
             return it.getValue();
         }
+
+        String pid = patient.getIdElement() != null ? patient.getIdElement().getIdPart() : null;
+        if (pid != null && fallbackScores != null) {
+            Integer fallback = fallbackScores.get(pid);
+            if (fallback != null) return fallback;
+        }
         return 0;
     }
 
-    private void writeJson(HttpServletResponse response, Map<String, Object> payload) throws Exception {
+    private void writeJson(HttpServletResponse response, Map<String, Object> payload) throws IOException {
         response.setStatus(200);
         response.setContentType("application/json");
         response.setCharacterEncoding("UTF-8");
@@ -281,12 +338,31 @@ public class DashboardProvider implements IResourceProvider {
         return asString(city) + "|" + asString(neighborhood) + "|" + asString(block);
     }
 
+    @SuppressWarnings("deprecation")
     private void loadVitalSignAverages(
             String cityFilter,
             Map<String, Map<String, VitalSignAccumulator>> cityAcc,
             Map<String, Map<String, VitalSignAccumulator>> neighborhoodAcc,
             Map<String, Map<String, VitalSignAccumulator>> blockAcc
     ) {
+        Map<String, String> neighborhoodToCity = new HashMap<>();
+        Map<String, String> blockToNeighborhood = new HashMap<>();
+        List<Object[]> blockLookupRows = em.createQuery(
+                "SELECT b.id.city, b.id.neighborhood, b.id.block FROM BlockNews2Aggregate b",
+                Object[].class
+        ).getResultList();
+        for (Object[] row : blockLookupRows) {
+            String c = normalize(asString(row[0]));
+            String n = normalize(asString(row[1]));
+            String b = normalize(asString(row[2]));
+            if (n != null && c != null && !neighborhoodToCity.containsKey(n)) {
+                neighborhoodToCity.put(n, c);
+            }
+            if (c != null && b != null && n != null) {
+                blockToNeighborhood.put(c + "|" + b, n);
+            }
+        }
+
         IFhirResourceDao<Observation> observationDao = daoRegistry.getResourceDao(Observation.class);
         SearchParameterMap avgSearch = new SearchParameterMap();
         avgSearch.add("category", new TokenParam("http://terminology.hl7.org/CodeSystem/observation-category", "vital-signs-average"));
@@ -301,6 +377,30 @@ public class DashboardProvider implements IResourceProvider {
             String neighborhood = extractLocationNested(obs, "neighborhood");
             String block = extractLocationNested(obs, "block");
 
+            String obsId = normalize(obs.getIdElement() != null ? obs.getIdElement().getIdPart() : null);
+            if ((neighborhood == null || neighborhood.isBlank()) && obsId != null && obsId.startsWith("neighborhood-")) {
+                String[] parts = obsId.split("-");
+                if (parts.length >= 2) neighborhood = normalize(parts[1]);
+            }
+            if ((block == null || block.isBlank()) && obsId != null && obsId.startsWith("block-")) {
+                String[] parts = obsId.split("-");
+                if (parts.length >= 2) block = normalize(parts[1]);
+            }
+            if ((city == null || city.isBlank()) && obsId != null && obsId.startsWith("city-")) {
+                String[] parts = obsId.split("-");
+                if (parts.length >= 2) city = normalize(parts[1]);
+            }
+
+            if ((city == null || city.isBlank()) && neighborhood != null && !neighborhood.isBlank()) {
+                city = neighborhoodToCity.get(neighborhood);
+            }
+            if ((neighborhood == null || neighborhood.isBlank()) && city != null && block != null) {
+                neighborhood = blockToNeighborhood.get(city + "|" + block);
+            }
+            if (city == null || city.isBlank()) {
+                city = defaultCity;
+            }
+
             if (cityFilter != null && (city == null || !cityFilter.equalsIgnoreCase(city))) {
                 continue;
             }
@@ -309,11 +409,16 @@ public class DashboardProvider implements IResourceProvider {
             if (vsa == null) continue;
 
             accumulate(cityAcc, asString(city), vsa);
-            accumulate(neighborhoodAcc, key(city, neighborhood, ""), vsa);
-            accumulate(blockAcc, key(city, neighborhood, block), vsa);
+            if (neighborhood != null && !neighborhood.isBlank()) {
+                accumulate(neighborhoodAcc, key(city, neighborhood, ""), vsa);
+            }
+            if (block != null && !block.isBlank()) {
+                accumulate(blockAcc, key(city, neighborhood, block), vsa);
+            }
         }
     }
 
+    @SuppressWarnings("deprecation")
     private ConditionCounts collectConditionCounts(String cityFilter) {
         ConditionCounts out = new ConditionCounts();
 
@@ -327,10 +432,7 @@ public class DashboardProvider implements IResourceProvider {
             if (!(resource instanceof Patient patient)) continue;
             String pid = patient.getIdElement() != null ? patient.getIdElement().getIdPart() : null;
             if (pid == null || pid.isBlank()) continue;
-            String city = extractLocationNested(patient, "city");
-            String neighborhood = extractLocationNested(patient, "neighborhood");
-            String block = extractLocationNested(patient, "block");
-            patientLocation.put(pid, new LocationTuple(city, neighborhood, block));
+            patientLocation.put(pid, resolvePatientLocation(patient));
         }
 
         IFhirResourceDao<Condition> conditionDao = daoRegistry.getResourceDao(Condition.class);
@@ -370,6 +472,67 @@ public class DashboardProvider implements IResourceProvider {
         return out;
     }
 
+    private LocationTuple resolvePatientLocation(Patient patient) {
+        if (patient == null) return new LocationTuple(defaultCity, null, null);
+
+        String city = extractLocationNested(patient, "city");
+        String neighborhood = extractLocationNested(patient, "neighborhood");
+        String block = extractLocationNested(patient, "block");
+
+        ScopedParts fromCityScope = extractScopedParts(patient.getIdentifier(), "urn:patient:city-block-scope");
+        ScopedParts fromNeighScope = extractScopedParts(patient.getIdentifier(), "urn:patient:neigh-block-scope");
+
+        if ((city == null || city.isBlank()) && fromCityScope != null) city = fromCityScope.scope;
+        if ((neighborhood == null || neighborhood.isBlank()) && fromNeighScope != null) neighborhood = fromNeighScope.scope;
+        if ((block == null || block.isBlank()) && fromCityScope != null) block = fromCityScope.block;
+        if ((block == null || block.isBlank()) && fromNeighScope != null) block = fromNeighScope.block;
+
+        if (block == null || block.isBlank()) {
+            block = deriveBlockFromResourceId(patient.getIdElement() != null ? patient.getIdElement().getIdPart() : null);
+        }
+
+        if (city == null || city.isBlank()) {
+            city = defaultCity;
+        }
+
+        return new LocationTuple(normalize(city), normalize(neighborhood), normalize(block));
+    }
+
+    private ScopedParts extractScopedParts(List<Identifier> identifiers, String system) {
+        if (identifiers == null || identifiers.isEmpty()) return null;
+        for (Identifier id : identifiers) {
+            if (id == null || id.getSystem() == null || id.getValue() == null) continue;
+            if (!system.equals(id.getSystem())) continue;
+
+            String value = id.getValue();
+            int first = value.indexOf('-');
+            int second = value.indexOf('-', first + 1);
+            if (first <= 0 || second <= first + 1) continue;
+
+            String scope = normalize(value.substring(0, first));
+            String block = normalize(value.substring(first + 1, second));
+            if (scope == null || block == null) continue;
+            return new ScopedParts(scope, block);
+        }
+        return null;
+    }
+
+    private String deriveBlockFromResourceId(String resourceId) {
+        String id = normalize(resourceId);
+        if (id == null) return null;
+        int dash = id.indexOf('-');
+        if (dash <= 1) return null;
+        String prefix = id.substring(0, dash);
+        if (prefix.length() < 2) return null;
+        char first = Character.toLowerCase(prefix.charAt(0));
+        if (first != 'b') return null;
+        String numeric = prefix.substring(1);
+        for (int i = 0; i < numeric.length(); i++) {
+            if (!Character.isDigit(numeric.charAt(i))) return null;
+        }
+        return "B" + numeric;
+    }
+
     private String extractLocationNested(Patient patient, String url) {
         if (patient == null) return null;
         Extension loc = patient.getExtensionByUrl(LOCATION_EXTENSION_URL);
@@ -396,15 +559,27 @@ public class DashboardProvider implements IResourceProvider {
 
     private boolean isActiveCondition(Condition condition) {
         if (condition == null || !condition.hasClinicalStatus()) return false;
-        return condition.getClinicalStatus().getCoding().stream()
-                .anyMatch(c -> c != null && c.getCode() != null && "active".equalsIgnoreCase(c.getCode()));
+        for (var coding : condition.getClinicalStatus().getCoding()) {
+            if (coding != null && coding.getCode() != null && "active".equalsIgnoreCase(coding.getCode())) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private void accumulate(Map<String, Map<String, VitalSignAccumulator>> root, String scopeKey, VitalSignAverage vsa) {
         if (scopeKey == null || scopeKey.isBlank() || vsa == null) return;
         String vitalKey = asString(vsa.vitalSign);
-        Map<String, VitalSignAccumulator> byVital = root.computeIfAbsent(scopeKey, k -> new LinkedHashMap<>());
-        VitalSignAccumulator acc = byVital.computeIfAbsent(vitalKey, k -> new VitalSignAccumulator());
+        Map<String, VitalSignAccumulator> byVital = root.get(scopeKey);
+        if (byVital == null) {
+            byVital = new LinkedHashMap<>();
+            root.put(scopeKey, byVital);
+        }
+        VitalSignAccumulator acc = byVital.get(vitalKey);
+        if (acc == null) {
+            acc = new VitalSignAccumulator();
+            byVital.put(vitalKey, acc);
+        }
         acc.add(vsa.averageValue, vsa.sampleCount, vsa.unit);
     }
 
@@ -494,7 +669,6 @@ public class DashboardProvider implements IResourceProvider {
         private final String neighborhood;
         private int totalScore;
         private int patientCount;
-        private long conditionCount;
 
         private NeighborhoodAccumulator(String city, String neighborhood) {
             this.city = city;
@@ -581,6 +755,16 @@ public class DashboardProvider implements IResourceProvider {
         private BlockAccumulator(String city, String neighborhood, String block) {
             this.city = city;
             this.neighborhood = neighborhood;
+            this.block = block;
+        }
+    }
+
+    private static class ScopedParts {
+        private final String scope;
+        private final String block;
+
+        private ScopedParts(String scope, String block) {
+            this.scope = scope;
             this.block = block;
         }
     }

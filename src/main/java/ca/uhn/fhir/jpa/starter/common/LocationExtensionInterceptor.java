@@ -17,7 +17,8 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 /**
- * Ensures `city` is present in `http://patient-location` when `block` exists.
+ * Ensures `city` is present in `http://patient-location` when location scope exists
+ * (block-level or neighborhood-level aggregates).
  */
 @Component
 @Interceptor
@@ -92,7 +93,11 @@ public class LocationExtensionInterceptor {
             }
         }
 
-        if (nested(locationExt, BLOCK_URL) == null || nested(locationExt, BLOCK_URL).isBlank()) return;
+        String finalBlock = nested(locationExt, BLOCK_URL);
+        String finalNeighborhood = nested(locationExt, "neighborhood");
+        boolean hasLocationScope = (finalBlock != null && !finalBlock.isBlank())
+            || (finalNeighborhood != null && !finalNeighborhood.isBlank());
+        if (!hasLocationScope) return;
 
         if (nested(locationExt, CITY_URL) == null || nested(locationExt, CITY_URL).isBlank()) {
             upsertNested(locationExt, CITY_URL, cityValue);
