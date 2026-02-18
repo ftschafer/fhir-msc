@@ -26,6 +26,7 @@ public class NeighborhoodVitalAggregationService {
     private static final String AVG_CATEGORY_SYSTEM = "http://terminology.hl7.org/CodeSystem/observation-category";
     private static final String AVG_CATEGORY_CODE = "vital-signs-average";
     private static final String STATISTICS_CODE_URL = "http://hl7.org/fhir/StructureDefinition/observation-statisticsCode";
+    private static final String SAMPLE_COUNT_URL = "http://observation-sample-count";
     private static final String LOCATION_EXTENSION_URL = "http://patient-location";
     private static final String BLOCK_URL = "block";
 
@@ -147,18 +148,8 @@ public class NeighborhoodVitalAggregationService {
         Observation template = blockAverages.get(0);
         
         // Extract values and calculate average across all blocks
-        List<BigDecimal> values = new ArrayList<>();
-        for (Observation obs : blockAverages) {
-            BigDecimal value = extractValue(obs);
-            if (value != null) {
-                values.add(value);
-            }
-        }
-
-        if (values.isEmpty()) return null;
-
-        BigDecimal sum = values.stream().reduce(BigDecimal.ZERO, BigDecimal::add);
-        BigDecimal avg = sum.divide(BigDecimal.valueOf(values.size()), 2, RoundingMode.HALF_UP);
+        BigDecimal avg = calculateNeighborhoodValue(blockAverages);
+        if (avg == null) return null;
 
         // Create neighborhood-level observation (not tied to a specific patient)
         Observation neighborhoodObs = new Observation();
@@ -175,6 +166,21 @@ public class NeighborhoodVitalAggregationService {
         
         neighborhoodObs.setCode(template.getCode().copy());
         neighborhoodObs.setCategory(template.getCategory());
+
+        // Preserve statistics marker and provide aggregated sample count when available
+        if (template.hasExtension()) {
+            for (Extension ext : template.getExtension()) {
+                if (STATISTICS_CODE_URL.equals(ext.getUrl())) {
+                    neighborhoodObs.addExtension(ext.copy());
+                }
+            }
+        }
+        int totalSampleCount = blockAverages.stream().mapToInt(this::extractSampleCount).sum();
+        if (totalSampleCount > 0) {
+            neighborhoodObs.addExtension(new Extension()
+                    .setUrl(SAMPLE_COUNT_URL)
+                    .setValue(new IntegerType(totalSampleCount)));
+        }
 
         // Set averaged value
         Quantity quantity = new Quantity();
@@ -206,5 +212,62 @@ public class NeighborhoodVitalAggregationService {
             return BigDecimal.valueOf(obs.getValueIntegerType().getValue());
         }
         return null;
+    }
+
+    private BigDecimal calculateNeighborhoodValue(List<Observation> blockAverages) {
+        if (blockAverages == null || blockAverages.isEmpty()) {
+            return null;
+        }
+
+        if (blockAverages.size() == 1) {
+            // Single block: keep exact value from previous layer (no re-rounding)
+            return extractValue(blockAverages.get(0));
+        }
+
+        BigDecimal weightedSum = BigDecimal.ZERO;
+        int totalWeight = 0;
+        int countWithoutWeight = 0;
+        BigDecimal sumWithoutWeight = BigDecimal.ZERO;
+
+        for (Observation obs : blockAverages) {
+            BigDecimal value = extractValue(obs);
+            if (value == null) {
+                continue;
+            }
+
+            int sampleCount = extractSampleCount(obs);
+            if (sampleCount > 0) {
+                weightedSum = weightedSum.add(value.multiply(BigDecimal.valueOf(sampleCount)));
+                totalWeight += sampleCount;
+            } else {
+                sumWithoutWeight = sumWithoutWeight.add(value);
+                countWithoutWeight++;
+            }
+        }
+
+        if (totalWeight > 0) {
+            return weightedSum.divide(BigDecimal.valueOf(totalWeight), 12, RoundingMode.HALF_UP);
+        }
+
+        if (countWithoutWeight > 0) {
+            return sumWithoutWeight.divide(BigDecimal.valueOf(countWithoutWeight), 12, RoundingMode.HALF_UP);
+        }
+
+        return null;
+    }
+
+    private int extractSampleCount(Observation obs) {
+        if (obs == null || !obs.hasExtension()) {
+            return 0;
+        }
+
+        for (Extension ext : obs.getExtension()) {
+            if (SAMPLE_COUNT_URL.equals(ext.getUrl()) && ext.getValue() instanceof IntegerType integerType
+                    && integerType.getValue() != null) {
+                return Math.max(integerType.getValue(), 0);
+            }
+        }
+
+        return 0;
     }
 }

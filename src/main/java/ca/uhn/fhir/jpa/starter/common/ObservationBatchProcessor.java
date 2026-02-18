@@ -15,13 +15,16 @@ public class ObservationBatchProcessor {
     private final ObservationEventQueue queue;
     private final News2AggregationService news2Service;
     private final BlockNews2AggregationService blockService;
+    private final NeighborhoodVitalAggregationService neighborhoodVitalAggregationService;
 
     public ObservationBatchProcessor(ObservationEventQueue queue,
                                      News2AggregationService news2Service,
-                                     BlockNews2AggregationService blockService) {
+                                     BlockNews2AggregationService blockService,
+                                     NeighborhoodVitalAggregationService neighborhoodVitalAggregationService) {
         this.queue = queue;
         this.news2Service = news2Service;
         this.blockService = blockService;
+        this.neighborhoodVitalAggregationService = neighborhoodVitalAggregationService;
     }
 
     @Scheduled(fixedDelay = 200) // adjust for throughput/latency
@@ -30,6 +33,11 @@ public class ObservationBatchProcessor {
         if (queue.isEmpty()) return;
         List<Observation> obs = queue.drain(BATCH_SIZE);
         if (obs.isEmpty()) return;
+
+        // Forward neighborhood-level averages to upstream when average observations are present.
+        // This path covers internally processed observations that may not carry HTTP request context.
+        neighborhoodVitalAggregationService.processBlockAverages(obs);
+
         Set<String> patients = news2Service.processBundleObservationsReturningPatients(obs);
         patients.forEach(blockService::updateBlockForPatient);
     }

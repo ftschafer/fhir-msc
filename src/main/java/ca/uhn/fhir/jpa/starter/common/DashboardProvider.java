@@ -8,6 +8,7 @@ import java.util.Map;
 
 import org.hl7.fhir.instance.model.api.IBaseResource;
 import org.hl7.fhir.r4.model.Condition;
+import org.hl7.fhir.r4.model.DecimalType;
 import org.hl7.fhir.r4.model.Extension;
 import org.hl7.fhir.r4.model.Identifier;
 import org.hl7.fhir.r4.model.IntegerType;
@@ -135,7 +136,7 @@ public class DashboardProvider implements IResourceProvider {
                 continue;
             }
 
-            int score = extractNews2Score(patient);
+            double score = extractNews2Score(patient);
 
             BlockStats bs = blockStatsMap.computeIfAbsent(blockName, k -> new BlockStats(k));
             bs.patientCount += 1;
@@ -407,13 +408,17 @@ public class DashboardProvider implements IResourceProvider {
         return all;
     }
 
-    private int extractNews2Score(Patient patient) {
+    private double extractNews2Score(Patient patient) {
         Extension ext = patient.getExtensionByUrl("http://news2-score");
         if (ext != null && ext.getValue() instanceof IntegerType) {
             Integer v = ((IntegerType) ext.getValue()).getValue();
-            return v != null ? v : 0;
+            return v != null ? v.doubleValue() : 0d;
         }
-        return 0;
+        if (ext != null && ext.getValue() instanceof DecimalType) {
+            java.math.BigDecimal v = ((DecimalType) ext.getValue()).getValue();
+            return v != null ? v.doubleValue() : 0d;
+        }
+        return 0d;
     }
 
     private boolean isActiveCondition(Condition condition) {
@@ -455,7 +460,7 @@ public class DashboardProvider implements IResourceProvider {
             if (i > 0) json.append(",");
             json.append("{");
             json.append("\"neighborhood\":\"").append(escapeJson(ns.neighborhood)).append("\",");
-            json.append("\"avgNews2\":").append(String.format(Locale.US, "%.1f", ns.patientCount > 0 ? (double) ns.totalScore / ns.patientCount : 0)).append(",");
+            json.append("\"avgNews2\":").append(String.format(Locale.US, "%.1f", ns.patientCount > 0 ? ns.totalScore / ns.patientCount : 0)).append(",");
             json.append("\"patientCount\":").append(ns.patientCount).append(",");
 
             json.append("\"vitalSignAverages\":[");
@@ -485,7 +490,7 @@ public class DashboardProvider implements IResourceProvider {
             json.append("\"city\":\"").append(escapeJson(bs.city)).append("\",");
             json.append("\"patientCount\":").append(bs.patientCount).append(",");
             json.append("\"conditionCount\":").append(bs.conditionCount).append(",");
-            json.append("\"avgNews2\":").append(String.format(Locale.US, "%.1f", bs.patientCount > 0 ? (double) bs.totalScore / bs.patientCount : 0)).append(",");
+            json.append("\"avgNews2\":").append(String.format(Locale.US, "%.1f", bs.patientCount > 0 ? bs.totalScore / bs.patientCount : 0)).append(",");
             
             // Vital sign averages
             json.append("\"vitalSignAverages\":[");
@@ -524,7 +529,7 @@ public class DashboardProvider implements IResourceProvider {
         String region;
         String city;
         int patientCount;
-        int totalScore;
+        double totalScore;
         int conditionCount;
         List<VitalSignAverage> vitalSignAverages = new ArrayList<>();
         
@@ -535,7 +540,7 @@ public class DashboardProvider implements IResourceProvider {
 
     static class NeighborhoodStats {
         String neighborhood;
-        int totalScore;
+        double totalScore;
         int patientCount;
         List<VitalSignAverage> vitalSignAverages = new ArrayList<>();
         
