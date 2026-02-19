@@ -640,7 +640,7 @@ public class DashboardProvider implements IResourceProvider {
             VitalSignAverage v = list.get(i);
             json.append("{")
                     .append("\"vitalSign\":\"").append(escapeJson(asString(v.vitalSign))).append("\",")
-                    .append("\"averageValue\":").append(String.format(Locale.US, "%.2f", v.averageValue)).append(",")
+                    .append("\"averageValue\":").append(String.format(Locale.US, "%.6f", v.averageValue)).append(",")
                     .append("\"unit\":\"").append(escapeJson(asString(v.unit))).append("\",")
                     .append("\"sampleCount\":").append(v.sampleCount)
                     .append("}");

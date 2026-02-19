@@ -287,7 +287,8 @@
 
   <script>
     const REFRESH_MS = 5000;
-    const MAX_POINTS = 120;
+    const TREND_WINDOW_MS = 60 * 60 * 1000; // 1 hour
+    const MAX_POINTS = 5000; // safety cap
     let autoRefreshHandle = null;
     let isLoadingDashboard = false;
     const cityVitalTrendHistory = new Map();
@@ -323,7 +324,8 @@
 
     function appendCityVitalTrendPoints(data) {
       if (!data || !Array.isArray(data.cityStats)) return;
-      const timestamp = new Date().toLocaleTimeString();
+            const nowMs = Date.now();
+            const timestamp = new Date(nowMs).toLocaleTimeString();
 
       data.cityStats.forEach(cs => {
         const city = cs.city || '';
@@ -336,17 +338,26 @@
               vitalSign: v.vitalSign || '',
               unit: v.unit || '',
               values: [],
-              labels: []
+              labels: [],
+              times: []
             });
           }
           const series = cityVitalTrendHistory.get(key);
           series.unit = v.unit || series.unit || '';
           series.values.push(Number(v.averageValue || 0));
           series.labels.push(timestamp);
+          series.times.push(nowMs);
+
+          while (series.times.length > 0 && (nowMs - series.times[0]) > TREND_WINDOW_MS) {
+            series.values.shift();
+            series.labels.shift();
+            series.times.shift();
+          }
 
           if (series.values.length > MAX_POINTS) {
             series.values.shift();
             series.labels.shift();
+            series.times.shift();
           }
         });
       });
@@ -399,13 +410,13 @@
             <div class="trend-card">
               <div class="trend-title">${escapeHtml(series.vitalSign)}</div>
               <div class="trend-subtitle">City: ${escapeHtml(city)}</div>
-              <div class="trend-current">${Number(current).toFixed(2)} ${escapeHtml(series.unit || '')}</div>
+                            <div class="trend-current">${Number(current).toFixed(4)} ${escapeHtml(series.unit || '')}</div>
               <svg class="trend-svg" viewBox="0 0 320 120" preserveAspectRatio="none">
                 <line x1="10" y1="110" x2="310" y2="110" stroke="#d9def7" stroke-width="1" />
                 <line x1="10" y1="10" x2="10" y2="110" stroke="#d9def7" stroke-width="1" />
                 <polyline fill="none" stroke="#667eea" stroke-width="2.2" points="${points}" />
               </svg>
-              <div class="trend-subtitle">Min: ${Number(min).toFixed(2)} · Max: ${Number(max).toFixed(2)} · Points: ${series.values.length}</div>
+                            <div class="trend-subtitle">Min: ${Number(min).toFixed(4)} · Max: ${Number(max).toFixed(4)} · Points: ${series.values.length} · Window: last 60m</div>
             </div>
           `;
         });
