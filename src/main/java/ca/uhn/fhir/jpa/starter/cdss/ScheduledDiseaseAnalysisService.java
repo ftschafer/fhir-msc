@@ -9,6 +9,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.time.Instant;
 import java.util.stream.Collectors;
 
 import org.hl7.fhir.instance.model.api.IBaseResource;
@@ -226,11 +227,17 @@ public class ScheduledDiseaseAnalysisService {
             if (libraryName != null && currentDiseaseStates.containsKey(libraryName)) {
                 Boolean stillDetected = currentDiseaseStates.get(libraryName);
                 if (stillDetected != null && !stillDetected) {
-                    // Disease no longer detected - resolve the condition
-                    resolveCondition(existingCondition);
-                    conditionsResolved++;
-                    logger.info("✓ Resolved Condition for patient {} ({}): no longer detected", 
-                               patientId, libraryName);
+                    if (hasNewerVitalDataThanCondition(existingCondition, vitalSigns)) {
+                        resolveCondition(existingCondition);
+                        conditionsResolved++;
+                        logger.info("✓ Resolved Condition for patient {} ({}): no longer detected after newer incoming data",
+                                patientId,
+                                libraryName);
+                    } else {
+                        logger.debug("Condition for patient {} ({}) remains active: no newer incoming vital data since condition record",
+                                patientId,
+                                libraryName);
+                    }
                 }
             }
         }
@@ -571,5 +578,53 @@ public class ScheduledDiseaseAnalysisService {
     private boolean hasExistingActiveCondition(String patientId, String libraryName) {
         List<Condition> activeConditions = getActiveConditions(patientId);
         return hasActiveConditionForLibrary(activeConditions, libraryName);
+    }
+
+    private boolean hasNewerVitalDataThanCondition(Condition condition, List<Observation> vitalSigns) {
+        Instant latestVitalInstant = vitalSigns.stream()
+                .map(this::observationInstant)
+                .filter(java.util.Objects::nonNull)
+                .max(Instant::compareTo)
+                .orElse(null);
+
+        if (latestVitalInstant == null) {
+            return false;
+        }
+
+        Instant conditionInstant = conditionInstant(condition);
+        if (conditionInstant == null) {
+            return true;
+        }
+
+        return latestVitalInstant.isAfter(conditionInstant);
+    }
+
+    private Instant observationInstant(Observation observation) {
+        if (observation == null) {
+            return null;
+        }
+        if (observation.getMeta() != null && observation.getMeta().getLastUpdated() != null) {
+            return observation.getMeta().getLastUpdated().toInstant();
+        }
+        if (observation.hasIssued() && observation.getIssued() != null) {
+            return observation.getIssued().toInstant();
+        }
+        if (observation.getEffective() instanceof DateTimeType dt && dt.getValue() != null) {
+            return dt.getValue().toInstant();
+        }
+        return null;
+    }
+
+    private Instant conditionInstant(Condition condition) {
+        if (condition == null) {
+            return null;
+        }
+        if (condition.getMeta() != null && condition.getMeta().getLastUpdated() != null) {
+            return condition.getMeta().getLastUpdated().toInstant();
+        }
+        if (condition.hasRecordedDate() && condition.getRecordedDate() != null) {
+            return condition.getRecordedDate().toInstant();
+        }
+        return null;
     }
 }

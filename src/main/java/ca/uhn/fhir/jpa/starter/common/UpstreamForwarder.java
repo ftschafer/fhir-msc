@@ -3,6 +3,7 @@ package ca.uhn.fhir.jpa.starter.common;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.locks.LockSupport;
 
 import org.hl7.fhir.r4.model.Bundle;
@@ -26,6 +27,9 @@ import ca.uhn.fhir.rest.server.exceptions.ResourceVersionConflictException;
 public class UpstreamForwarder {
     private static final Logger ourLog = LoggerFactory.getLogger(UpstreamForwarder.class);
     private static final int PATIENT_RETRY_ATTEMPTS = 6;
+    private static final long UPSTREAM_FAILURE_COOLDOWN_MS = 60_000L;
+
+    private final AtomicLong upstreamSuppressUntilMs = new AtomicLong(0L);
 
     @Value("${hapi.fhir.location.block:North}")
     private String blockValue;
@@ -39,6 +43,7 @@ public class UpstreamForwarder {
 
     public void createObservations(List<Observation> observations) {
         if (observations == null || observations.isEmpty()) return;
+        if (isUpstreamSuppressed("observations")) return;
         try {
             Bundle tx = new Bundle().setType(Bundle.BundleType.TRANSACTION);
             for (Observation o : observations) {
@@ -84,6 +89,7 @@ public class UpstreamForwarder {
             }
             client.transaction().withBundle(tx).execute();
         } catch (BaseServerResponseException e) {
+            maybeSuppressUpstream(e, "observations");
             ourLog.error("ERROR forwarding observations: {}", e.getMessage());
         } catch (Exception e) {
             ourLog.error("ERROR forwarding observations", e);
@@ -92,6 +98,7 @@ public class UpstreamForwarder {
 
     public void upsertPatients(List<Patient> patients) {
         if (patients == null || patients.isEmpty()) return;
+        if (isUpstreamSuppressed("patients")) return;
         int total = patients.size();
         int successCount = 0;
 
@@ -203,6 +210,7 @@ public class UpstreamForwarder {
      */
     public void upsertConditionsWithObservations(List<Condition> conditions, List<Observation> observations) {
         if (conditions == null || conditions.isEmpty()) return;
+        if (isUpstreamSuppressed("conditions")) return;
         try {
             Map<String, String> oldToNewObservationIds = new HashMap<>();
             
@@ -370,11 +378,43 @@ public class UpstreamForwarder {
             client.transaction().withBundle(conditionTx).execute();
             
         } catch (BaseServerResponseException e) {
+            maybeSuppressUpstream(e, "conditions");
             ourLog.error("ERROR forwarding conditions: {}", e.getMessage());
             throw new RuntimeException("Failed to forward conditions", e);
         } catch (Exception e) {
             ourLog.error("ERROR forwarding conditions", e);
             throw new RuntimeException("Failed to forward conditions", e);
+        }
+    }
+
+    private boolean isUpstreamSuppressed(String operation) {
+        long until = upstreamSuppressUntilMs.get();
+        long now = System.currentTimeMillis();
+        if (until > now) {
+            long remainingSec = (until - now) / 1000;
+            ourLog.debug("Skipping upstream {} forwarding for {}s due to previous upstream schema error", operation, remainingSec);
+            return true;
+        }
+        return false;
+    }
+
+    private void maybeSuppressUpstream(BaseServerResponseException e, String operation) {
+        String msg = e.getMessage();
+        if (msg == null) {
+            return;
+        }
+
+        boolean schemaMissing = msg.contains("HFJ_SPIDX_TOKEN")
+                || msg.contains("SQLGrammarException")
+                || msg.contains("database is empty")
+                || msg.contains("Table \"");
+
+        if (schemaMissing) {
+            long until = System.currentTimeMillis() + UPSTREAM_FAILURE_COOLDOWN_MS;
+            upstreamSuppressUntilMs.set(until);
+            ourLog.error("Upstream appears uninitialized (missing HAPI schema). Suppressing {} forwarding for {}s.",
+                    operation,
+                    UPSTREAM_FAILURE_COOLDOWN_MS / 1000);
         }
     }
     

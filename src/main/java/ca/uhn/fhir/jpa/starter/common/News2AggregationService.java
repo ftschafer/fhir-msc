@@ -3,6 +3,7 @@ package ca.uhn.fhir.jpa.starter.common;
 import ca.uhn.fhir.context.FhirContext;
 import ca.uhn.fhir.jpa.api.dao.DaoRegistry;
 import ca.uhn.fhir.jpa.api.dao.IFhirResourceDao;
+import ca.uhn.fhir.jpa.searchparam.SearchParameterMap;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
 import jakarta.persistence.EntityManager;
@@ -28,6 +29,9 @@ public class News2AggregationService {
     private static final String NEWS2_EXTENSION_URL = "http://news2-score";
     private static final String LOCATION_EXTENSION_URL = "http://patient-location";
     private static final String BLOCK_URL = "block";
+    private static final String BLOCK_AVG_IDENTIFIER_SYSTEM = "urn:aggregate:news2";
+    private static final String BLOCK_AVG_CODE_SYSTEM = "http://news2-score";
+    private static final String BLOCK_AVG_CODE = "block-average";
 
     private static final Set<String> LOINC_CODES =
             Set.of("8867-4", "9279-1", "8310-5", "59408-5", "8480-6");
@@ -215,24 +219,116 @@ public class News2AggregationService {
             meterRegistry.counter(METRIC_OUTCOME, "result", "changed").increment();
 
             Patient finalPatient = patient;
+            BlockAverageSnapshot blockAverage = computeBlockAverage(blockValue);
 
             TransactionSynchronizationManager.registerSynchronization(
-                    new TransactionSynchronization() {
-                        @Override
-                        public void afterCommit() {
-                            Timer.Sample upstreamTimer = Timer.start(meterRegistry);
-                            upstreamForwarder.upsertPatients(List.of(finalPatient));
-                            upstreamTimer.stop(
-                                    Timer.builder(METRIC_UPSTREAM)
-                                            .description("Time spent forwarding patients upstream")
-                                            .register(meterRegistry)
-                            );
-                        }
-                    }
+                    new PatientAndBlockForwardSync(finalPatient, blockAverage)
             );
 
         } else {
             meterRegistry.counter(METRIC_OUTCOME, "result", "unchanged").increment();
+        }
+    }
+
+    private BlockAverageSnapshot computeBlockAverage(String block) {
+        SearchParameterMap search = new SearchParameterMap();
+        search.setLoadSynchronous(true);
+
+        List<IBaseResource> resources = patientDao().search(search).getAllResources();
+        double total = 0.0;
+        int count = 0;
+
+        for (IBaseResource resource : resources) {
+            Patient patient = (Patient) resource;
+            if (!Objects.equals(extractBlock(patient), block)) {
+                continue;
+            }
+
+            Extension news2Ext = patient.getExtensionByUrl(NEWS2_EXTENSION_URL);
+            if (news2Ext != null && news2Ext.getValue() instanceof IntegerType integerType && integerType.getValue() != null) {
+                total += integerType.getValue();
+                count++;
+            }
+        }
+
+        double average = count > 0 ? total / count : 0.0;
+        return new BlockAverageSnapshot(block, average, count);
+    }
+
+    private String extractBlock(Patient patient) {
+        Extension locationExtension = patient.getExtensionByUrl(LOCATION_EXTENSION_URL);
+        if (locationExtension == null) {
+            return null;
+        }
+
+        for (Extension nested : locationExtension.getExtension()) {
+            if (BLOCK_URL.equals(nested.getUrl()) && nested.getValue() instanceof StringType stringType) {
+                return stringType.getValue();
+            }
+        }
+        return null;
+    }
+
+    private Observation toBlockAverageObservation(BlockAverageSnapshot snapshot) {
+        Observation observation = new Observation();
+        observation.setStatus(Observation.ObservationStatus.FINAL);
+
+        observation.addIdentifier()
+                .setSystem(BLOCK_AVG_IDENTIFIER_SYSTEM)
+                .setValue(snapshot.block() + "|" + BLOCK_AVG_CODE);
+
+        observation.addCategory()
+                .addCoding()
+                .setSystem("http://terminology.hl7.org/CodeSystem/observation-category")
+                .setCode("survey")
+                .setDisplay("Survey");
+
+        observation.getCode()
+                .addCoding()
+                .setSystem(BLOCK_AVG_CODE_SYSTEM)
+                .setCode(BLOCK_AVG_CODE)
+                .setDisplay("NEWS2 Block Average");
+
+        observation.setValue(new Quantity()
+                .setValue(snapshot.average())
+                .setUnit("score")
+                .setSystem("http://unitsofmeasure.org")
+                .setCode("{score}"));
+
+        Extension locationExtension = new Extension();
+        locationExtension.setUrl(LOCATION_EXTENSION_URL);
+        locationExtension.addExtension(new Extension()
+                .setUrl(BLOCK_URL)
+                .setValue(new StringType(snapshot.block())));
+        observation.addExtension(locationExtension);
+
+        observation.addExtension(new Extension("http://observation-sample-count", new IntegerType(snapshot.sampleCount())));
+        observation.setEffective(new DateTimeType(new Date()));
+        return observation;
+    }
+
+    private record BlockAverageSnapshot(String block, double average, int sampleCount) {
+    }
+
+    private class PatientAndBlockForwardSync implements TransactionSynchronization {
+        private final Patient patient;
+        private final BlockAverageSnapshot blockAverage;
+
+        private PatientAndBlockForwardSync(Patient patient, BlockAverageSnapshot blockAverage) {
+            this.patient = patient;
+            this.blockAverage = blockAverage;
+        }
+
+        @Override
+        public void afterCommit() {
+            Timer.Sample upstreamTimer = Timer.start(meterRegistry);
+            upstreamForwarder.upsertPatients(List.of(patient));
+            upstreamForwarder.createObservations(List.of(toBlockAverageObservation(blockAverage)));
+            upstreamTimer.stop(
+                    Timer.builder(METRIC_UPSTREAM)
+                            .description("Time spent forwarding patients upstream")
+                            .register(meterRegistry)
+            );
         }
     }
 
