@@ -287,7 +287,6 @@ public class StarterJpaConfig {
 			BinaryStorageInterceptor binaryStorageInterceptor,
 			IValidatorModule validatorModule,
 			// PatientTotalNews2ScoreInterceptor patientTotalNews2ScoreInterceptor,
-			News2AggregationInterceptorDB news2AggregationInterceptorDB,
 			ObservationBlockInterceptor observationBlockInterceptor,
 			PatientBlockInterceptor patientBlockInterceptor,		
 			LocationExtensionInterceptor locationExtensionInterceptor,			
@@ -328,7 +327,6 @@ public class StarterJpaConfig {
 		fhirServer.registerProviders(resourceProviderFactory.createProviders());
 		fhirServer.registerProvider(jpaSystemProvider);
 		// fhirServer.registerInterceptor(patientTotalNews2ScoreInterceptor);
-		fhirServer.registerInterceptor(news2AggregationInterceptorDB);
 		fhirServer.registerInterceptor(observationBlockInterceptor);
 		fhirServer.registerInterceptor(patientBlockInterceptor);
 		fhirServer.registerInterceptor(locationExtensionInterceptor);

@@ -309,6 +309,82 @@
     <script>
         let autoRefreshInterval;
         let chartInstances = {}; // Store chart instances for updates
+        const HISTORY_STORAGE_KEY = 'vital-history-cache-by-block-v1';
+        let historicalByBlock = {};
+
+        function normalizeBlockKey(block) {
+            return (block || 'North').trim().toUpperCase();
+        }
+
+        function loadHistoricalCache() {
+            try {
+                const raw = localStorage.getItem(HISTORY_STORAGE_KEY);
+                if (!raw) return;
+                const parsed = JSON.parse(raw);
+                if (parsed && typeof parsed === 'object') {
+                    historicalByBlock = parsed;
+                }
+            } catch (e) {
+                console.warn('Failed to load historical chart cache', e);
+                historicalByBlock = {};
+            }
+        }
+
+        function saveHistoricalCache() {
+            try {
+                localStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(historicalByBlock));
+            } catch (e) {
+                console.warn('Failed to save historical chart cache', e);
+            }
+        }
+
+        function getCachedHistory(block) {
+            const key = normalizeBlockKey(block);
+            const cached = historicalByBlock[key];
+            return cached && typeof cached === 'object' ? cached : {};
+        }
+
+        function mergeHistoricalData(block, incoming) {
+            const key = normalizeBlockKey(block);
+            const existing = getCachedHistory(block);
+            const merged = JSON.parse(JSON.stringify(existing || {}));
+
+            if (incoming && typeof incoming === 'object') {
+                Object.entries(incoming).forEach(([code, vitalData]) => {
+                    if (!vitalData || !Array.isArray(vitalData.data)) return;
+
+                    const prev = merged[code] || { name: vitalData.name || code, data: [] };
+                    const byTimestamp = new Map();
+
+                    (prev.data || []).forEach(point => {
+                        if (!point || !point.timestamp) return;
+                        byTimestamp.set(String(point.timestamp), point);
+                    });
+
+                    vitalData.data.forEach(point => {
+                        if (!point || !point.timestamp) return;
+                        byTimestamp.set(String(point.timestamp), point);
+                    });
+
+                    const combined = Array.from(byTimestamp.values())
+                        .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+
+                    merged[code] = {
+                        ...prev,
+                        ...vitalData,
+                        data: combined
+                    };
+                });
+            }
+
+            historicalByBlock[key] = merged;
+            saveHistoricalCache();
+            return merged;
+        }
+
+        function hasHistoryData(historyData) {
+            return !!historyData && Object.values(historyData).some(v => v && Array.isArray(v.data) && v.data.length > 0);
+        }
         
         function toFixedSafe(val, digits) {
             const n = Number(val);
@@ -448,6 +524,7 @@
             try {
                 // Use the provided block, or fall back to 'North' as a reasonable default
                 const block = blockFilter || 'North';
+                const cached = getCachedHistory(block);
                 const url = `/fhir/Observation/%24vital-history?block=${encodeURIComponent(block)}&days=30`;
                 
                 console.log('Loading historical data from:', url);
@@ -464,11 +541,19 @@
                 const historyData = await response.json();
                 console.log('Historical data received:', historyData);
                 console.log('Number of vital signs with data:', Object.keys(historyData).length);
-                
-                renderCharts(historyData);
+
+                const merged = mergeHistoricalData(block, historyData);
+                renderCharts(merged);
                 
             } catch (err) {
                 console.error('Error loading historical data:', err);
+                const block = blockFilter || 'North';
+                const cached = getCachedHistory(block);
+                if (hasHistoryData(cached)) {
+                    console.warn('Using cached history data after fetch error');
+                    renderCharts(cached);
+                    return;
+                }
                 const container = document.getElementById('chartsContainer');
                 container.innerHTML = `<p style="text-align:center; color:#dc3545; padding:40px;">Error: ${err.message}</p>`;
             }
@@ -619,6 +704,7 @@
 
         // Load on page load
         window.addEventListener('load', () => {
+            loadHistoricalCache();
             loadDashboard();
             startAutoRefresh();
         });

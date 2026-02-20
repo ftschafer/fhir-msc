@@ -36,6 +36,10 @@ import jakarta.servlet.http.HttpServletResponse;
 @Component
 public class DashboardProvider implements IResourceProvider {
 
+    private static final String NEWS2_IDENTIFIER_SYSTEM = "urn:aggregate:news2";
+    private static final String BLOCK_AVERAGE_SUFFIX = "|block-average";
+    private static final String NEIGHBORHOOD_AVERAGE_SUFFIX = "|neighborhood-average";
+
     private final DaoRegistry daoRegistry;
     
     // Cache results for 30 seconds
@@ -249,6 +253,64 @@ public class DashboardProvider implements IResourceProvider {
                 }
             }
         }
+
+        // Override NEWS2 averages with aggregate observations so dashboard uses same source as forwarding pipeline.
+        Map<String, Double> blockAverageByBlock = new HashMap<>();
+        Map<String, Double> neighborhoodAverageByNeighborhood = new HashMap<>();
+        SearchParameterMap news2AggSearch = new SearchParameterMap();
+        news2AggSearch.setLoadSynchronous(true);
+        news2AggSearch.add("identifier", new TokenParam(NEWS2_IDENTIFIER_SYSTEM, null));
+        IBundleProvider news2AggResults = observationDao.search(news2AggSearch);
+        List<IBaseResource> news2Aggregates = getAllResources(news2AggResults);
+        for (IBaseResource res : news2Aggregates) {
+            if (!(res instanceof Observation obs) || !obs.hasIdentifier()) {
+                continue;
+            }
+
+            String aggregateId = null;
+            for (Identifier identifier : obs.getIdentifier()) {
+                if (NEWS2_IDENTIFIER_SYSTEM.equals(identifier.getSystem()) && identifier.hasValue()) {
+                    aggregateId = normalize(identifier.getValue());
+                    if (aggregateId != null) {
+                        break;
+                    }
+                }
+            }
+            if (aggregateId == null) {
+                continue;
+            }
+
+            Double aggregateValue = extractObservationNumericValue(obs);
+            if (aggregateValue == null) {
+                continue;
+            }
+
+            if (aggregateId.endsWith(BLOCK_AVERAGE_SUFFIX)) {
+                String block = normalize(aggregateId.substring(0, aggregateId.length() - BLOCK_AVERAGE_SUFFIX.length()));
+                if (block != null && (filterBlock == null || filterBlock.isBlank() || filterBlock.equals(block))) {
+                    blockAverageByBlock.put(block, aggregateValue);
+                }
+            } else if (aggregateId.endsWith(NEIGHBORHOOD_AVERAGE_SUFFIX)) {
+                String neighborhood = normalize(aggregateId.substring(0, aggregateId.length() - NEIGHBORHOOD_AVERAGE_SUFFIX.length()));
+                if (neighborhood != null) {
+                    neighborhoodAverageByNeighborhood.put(neighborhood, aggregateValue);
+                }
+            }
+        }
+
+        for (BlockStats blockStats : blockStatsMap.values()) {
+            Double aggregate = blockAverageByBlock.get(blockStats.block);
+            if (aggregate != null) {
+                blockStats.aggregateNews2 = aggregate;
+            }
+        }
+
+        for (NeighborhoodStats neighborhoodStats : neighborhoodStatsMap.values()) {
+            Double aggregate = neighborhoodAverageByNeighborhood.get(neighborhoodStats.neighborhood);
+            if (aggregate != null) {
+                neighborhoodStats.aggregateNews2 = aggregate;
+            }
+        }
         
         // Convert to lists
         stats.blockStats = new ArrayList<>(blockStatsMap.values());
@@ -429,6 +491,29 @@ public class DashboardProvider implements IResourceProvider {
             .anyMatch(c -> c != null && c.getCode() != null && "active".equalsIgnoreCase(c.getCode()));
     }
 
+    private Double extractObservationNumericValue(Observation observation) {
+        if (observation == null) {
+            return null;
+        }
+        if (observation.hasValueQuantity() && observation.getValueQuantity().getValue() != null) {
+            return observation.getValueQuantity().getValue().doubleValue();
+        }
+        if (observation.getValue() instanceof IntegerType integerType && integerType.getValue() != null) {
+            return integerType.getValue().doubleValue();
+        }
+        if (observation.getValue() instanceof DecimalType decimalType && decimalType.getValue() != null) {
+            return decimalType.getValue().doubleValue();
+        }
+        Extension ext = observation.getExtensionByUrl("http://news2-score");
+        if (ext != null && ext.getValue() instanceof IntegerType integerType && integerType.getValue() != null) {
+            return integerType.getValue().doubleValue();
+        }
+        if (ext != null && ext.getValue() instanceof DecimalType decimalType && decimalType.getValue() != null) {
+            return decimalType.getValue().doubleValue();
+        }
+        return null;
+    }
+
     private String extractBlock(Condition condition) {
         Extension locExt = condition.getExtensionByUrl("http://patient-location");
         if (locExt != null) {
@@ -460,7 +545,10 @@ public class DashboardProvider implements IResourceProvider {
             if (i > 0) json.append(",");
             json.append("{");
             json.append("\"neighborhood\":\"").append(escapeJson(ns.neighborhood)).append("\",");
-            json.append("\"avgNews2\":").append(String.format(Locale.US, "%.1f", ns.patientCount > 0 ? ns.totalScore / ns.patientCount : 0)).append(",");
+            double neighborhoodAvgNews2 = ns.aggregateNews2 != null
+                ? ns.aggregateNews2
+                : (ns.patientCount > 0 ? ns.totalScore / ns.patientCount : 0);
+            json.append("\"avgNews2\":").append(String.format(Locale.US, "%.1f", neighborhoodAvgNews2)).append(",");
             json.append("\"patientCount\":").append(ns.patientCount).append(",");
 
             json.append("\"vitalSignAverages\":[");
@@ -490,7 +578,10 @@ public class DashboardProvider implements IResourceProvider {
             json.append("\"city\":\"").append(escapeJson(bs.city)).append("\",");
             json.append("\"patientCount\":").append(bs.patientCount).append(",");
             json.append("\"conditionCount\":").append(bs.conditionCount).append(",");
-            json.append("\"avgNews2\":").append(String.format(Locale.US, "%.1f", bs.patientCount > 0 ? bs.totalScore / bs.patientCount : 0)).append(",");
+            double blockAvgNews2 = bs.aggregateNews2 != null
+                ? bs.aggregateNews2
+                : (bs.patientCount > 0 ? bs.totalScore / bs.patientCount : 0);
+            json.append("\"avgNews2\":").append(String.format(Locale.US, "%.1f", blockAvgNews2)).append(",");
             
             // Vital sign averages
             json.append("\"vitalSignAverages\":[");
@@ -530,6 +621,7 @@ public class DashboardProvider implements IResourceProvider {
         String city;
         int patientCount;
         double totalScore;
+        Double aggregateNews2;
         int conditionCount;
         List<VitalSignAverage> vitalSignAverages = new ArrayList<>();
         
@@ -542,6 +634,7 @@ public class DashboardProvider implements IResourceProvider {
         String neighborhood;
         double totalScore;
         int patientCount;
+        Double aggregateNews2;
         List<VitalSignAverage> vitalSignAverages = new ArrayList<>();
         
         NeighborhoodStats(String neighborhood) {

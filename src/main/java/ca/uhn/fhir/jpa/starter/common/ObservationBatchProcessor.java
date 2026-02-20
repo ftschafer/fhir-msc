@@ -5,7 +5,7 @@ import org.hl7.fhir.r4.model.Observation;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 import java.util.List;
-import java.util.Set;
+import java.util.stream.Collectors;
 
 @Component
 public class ObservationBatchProcessor {
@@ -13,16 +13,13 @@ public class ObservationBatchProcessor {
     private static final int BATCH_SIZE = 200;
 
     private final ObservationEventQueue queue;
-    private final News2AggregationService news2Service;
     private final BlockNews2AggregationService blockService;
     private final NeighborhoodVitalAggregationService neighborhoodVitalAggregationService;
 
     public ObservationBatchProcessor(ObservationEventQueue queue,
-                                     News2AggregationService news2Service,
                                      BlockNews2AggregationService blockService,
                                      NeighborhoodVitalAggregationService neighborhoodVitalAggregationService) {
         this.queue = queue;
-        this.news2Service = news2Service;
         this.blockService = blockService;
         this.neighborhoodVitalAggregationService = neighborhoodVitalAggregationService;
     }
@@ -38,7 +35,15 @@ public class ObservationBatchProcessor {
         // This path covers internally processed observations that may not carry HTTP request context.
         neighborhoodVitalAggregationService.processBlockAverages(obs);
 
-        Set<String> patients = news2Service.processBundleObservationsReturningPatients(obs);
-        patients.forEach(blockService::updateBlockForPatient);
+        obs.stream()
+            .map(Observation::getSubject)
+            .filter(java.util.Objects::nonNull)
+            .map(ref -> ref.getReference())
+            .filter(java.util.Objects::nonNull)
+            .filter(ref -> ref.startsWith("Patient/"))
+            .map(ref -> ref.substring("Patient/".length()))
+            .filter(id -> !id.isBlank())
+            .collect(Collectors.toSet())
+            .forEach(blockService::updateBlockForPatient);
     }
 }

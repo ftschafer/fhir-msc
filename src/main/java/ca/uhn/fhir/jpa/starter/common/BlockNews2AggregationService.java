@@ -18,7 +18,6 @@ import org.springframework.stereotype.Service;
 import java.util.Date;
 import java.util.Objects;
 import java.util.Optional;
-import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
@@ -51,14 +50,12 @@ public class BlockNews2AggregationService {
     private final DaoRegistry daoRegistry;
     private final FhirContext fhirContext;
     private final UpstreamForwarder upstreamForwarder;
-    private final ThreadPoolTaskExecutor aggExecutor;
     private final MeterRegistry meterRegistry;
 
-    public BlockNews2AggregationService(DaoRegistry daoRegistry, FhirContext fhirContext, UpstreamForwarder upstreamForwarder, ThreadPoolTaskExecutor aggExecutor, MeterRegistry meterRegistry) {
+    public BlockNews2AggregationService(DaoRegistry daoRegistry, FhirContext fhirContext, UpstreamForwarder upstreamForwarder, MeterRegistry meterRegistry) {
         this.daoRegistry = daoRegistry;
         this.fhirContext = fhirContext;
         this.upstreamForwarder = upstreamForwarder;
-        this.aggExecutor = aggExecutor;
         this.meterRegistry = meterRegistry;
     }
 

@@ -5,6 +5,7 @@ import ca.uhn.fhir.interceptor.api.Pointcut;
 import ca.uhn.fhir.rest.api.server.RequestDetails;
 import org.hl7.fhir.instance.model.api.IBaseResource;
 import org.hl7.fhir.r4.model.Extension;
+import org.hl7.fhir.r4.model.Identifier;
 import org.hl7.fhir.r4.model.Observation;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -22,6 +23,8 @@ public class ObservationUpstreamForwardingInterceptor {
     private static final String STATISTICS_CODE_URL = "http://hl7.org/fhir/StructureDefinition/observation-statisticsCode";
     private static final String LOCATION_EXTENSION_URL = "http://patient-location";
     private static final String BLOCK_URL = "block";
+    private static final String NEWS2_IDENTIFIER_SYSTEM = "urn:aggregate:news2";
+    private static final String BLOCK_AVERAGE_SUFFIX = "|block-average";
 
     private final NeighborhoodVitalAggregationService aggregationService;
 
@@ -48,6 +51,14 @@ public class ObservationUpstreamForwardingInterceptor {
     private boolean shouldAggregateForward(Observation observation) {
         if (observation == null) {
             return false;
+        }
+
+        for (Identifier identifier : observation.getIdentifier()) {
+            if (NEWS2_IDENTIFIER_SYSTEM.equals(identifier.getSystem())
+                    && identifier.getValue() != null
+                    && identifier.getValue().endsWith(BLOCK_AVERAGE_SUFFIX)) {
+                return true;
+            }
         }
 
         boolean hasAverageStatistics = false;

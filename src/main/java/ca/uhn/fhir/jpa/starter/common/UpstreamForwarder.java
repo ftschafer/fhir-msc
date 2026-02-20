@@ -398,21 +398,33 @@ public class UpstreamForwarder {
         Extension existingLocation = resource.getExtensionByUrl(LOCATION_EXTENSION_URL);
 
         Extension rebuiltLocation = new Extension().setUrl(LOCATION_EXTENSION_URL);
+        Extension existingNeighborhood = null;
         if (existingLocation != null && existingLocation.hasExtension()) {
             for (Extension nested : existingLocation.getExtension()) {
                 if (NEIGHBORHOOD_EXTENSION_URL.equals(nested.getUrl())) {
+                    if (nested.getValue() != null
+                            && nested.getValue().primitiveValue() != null
+                            && !nested.getValue().primitiveValue().isBlank()) {
+                        existingNeighborhood = nested.copy();
+                    }
                     continue;
                 }
                 rebuiltLocation.addExtension(nested.copy());
             }
         }
 
-        rebuiltLocation.addExtension(new Extension()
-                .setUrl(NEIGHBORHOOD_EXTENSION_URL)
-                .setValue(new org.hl7.fhir.r4.model.StringType(neighborhoodValue)));
+        if (existingNeighborhood != null) {
+            rebuiltLocation.addExtension(existingNeighborhood);
+        } else if (neighborhoodValue != null && !neighborhoodValue.isBlank()) {
+            rebuiltLocation.addExtension(new Extension()
+                    .setUrl(NEIGHBORHOOD_EXTENSION_URL)
+                    .setValue(new org.hl7.fhir.r4.model.StringType(neighborhoodValue)));
+        }
 
         resource.getExtension().removeIf(ext -> LOCATION_EXTENSION_URL.equals(ext.getUrl()));
-        resource.addExtension(rebuiltLocation);
+        if (rebuiltLocation.hasExtension()) {
+            resource.addExtension(rebuiltLocation);
+        }
     }
     
     /**

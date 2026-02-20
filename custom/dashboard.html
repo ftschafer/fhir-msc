@@ -302,11 +302,51 @@
     <script>
         const BASE_URL = window.location.origin;
         const REFRESH_MS = 5000;
-        const MAX_POINTS = 120;
+        const TREND_WINDOW_MS = 60 * 60 * 1000;
+        const MAX_POINTS = 1000;
+        const TREND_STORAGE_KEY = 'news2-vital-trend-history-v1';
 
         let autoRefreshHandle = null;
         let isLoadingDashboard = false;
         const vitalTrendHistory = new Map();
+
+        function saveTrendHistory() {
+            try {
+                const serialized = JSON.stringify(Array.from(vitalTrendHistory.entries()));
+                localStorage.setItem(TREND_STORAGE_KEY, serialized);
+            } catch (e) {
+                console.warn('Failed to persist trend history', e);
+            }
+        }
+
+        function loadTrendHistory() {
+            try {
+                const raw = localStorage.getItem(TREND_STORAGE_KEY);
+                if (!raw) return;
+                const entries = JSON.parse(raw);
+                if (!Array.isArray(entries)) return;
+
+                const nowTs = Date.now();
+                const minTs = nowTs - TREND_WINDOW_MS;
+
+                entries.forEach(entry => {
+                    if (!Array.isArray(entry) || entry.length !== 2) return;
+                    const key = entry[0];
+                    const series = entry[1];
+                    if (!series || !Array.isArray(series.points)) return;
+
+                    series.points = series.points
+                        .filter(p => p && Number.isFinite(p.ts) && Number.isFinite(Number(p.value)) && p.ts >= minTs)
+                        .slice(-MAX_POINTS);
+
+                    if (series.points.length > 0) {
+                        vitalTrendHistory.set(key, series);
+                    }
+                });
+            } catch (e) {
+                console.warn('Failed to load persisted trend history', e);
+            }
+        }
         
         function loadDashboard(showLoading = true) {
             if (isLoadingDashboard) return;
@@ -490,7 +530,8 @@
         function appendVitalTrendPoints(data) {
             if (!data || !data.neighborhoodStats) return;
 
-            const timestamp = new Date().toLocaleTimeString();
+            const nowTs = Date.now();
+            const minTs = nowTs - TREND_WINDOW_MS;
             data.neighborhoodStats.forEach(ns => {
                 const neighborhood = ns.neighborhood || '';
                 const list = ns.vitalSignAverages || [];
@@ -501,61 +542,73 @@
                             neighborhood,
                             vitalSign: vsa.vitalSign || '',
                             unit: vsa.unit || '',
-                            labels: [],
-                            values: []
+                            points: []
                         });
                     }
 
                     const series = vitalTrendHistory.get(key);
                     series.unit = vsa.unit || series.unit || '';
-                    series.labels.push(timestamp);
-                    series.values.push(Number(vsa.averageValue || 0));
+                    series.points.push({
+                        ts: nowTs,
+                        value: Number(vsa.averageValue || 0)
+                    });
 
-                    if (series.values.length > MAX_POINTS) {
-                        series.values.shift();
-                        series.labels.shift();
+                    series.points = series.points.filter(p => p && Number.isFinite(p.ts) && p.ts >= minTs);
+
+                    if (series.points.length > MAX_POINTS) {
+                        series.points.splice(0, series.points.length - MAX_POINTS);
                     }
                 });
             });
+
+            saveTrendHistory();
         }
 
         function renderTrendCharts(data) {
-            if (!data || !data.neighborhoodStats) {
+            if (!data) {
                 return '<div class="empty">No trend data available</div>';
             }
 
             let html = '<div class="trend-grid">';
             let hasAny = false;
 
-            data.neighborhoodStats.forEach(ns => {
-                const neighborhood = ns.neighborhood || '';
-                const list = ns.vitalSignAverages || [];
-                list.forEach(vsa => {
-                    const key = makeTrendKey(neighborhood, vsa.vitalSign);
-                    const series = vitalTrendHistory.get(key);
-                    if (!series || !series.values || series.values.length === 0) return;
+            const nowTs = Date.now();
+            const minTs = nowTs - TREND_WINDOW_MS;
+
+            Array.from(vitalTrendHistory.values())
+                .sort((a, b) => {
+                    const nameA = `${a.neighborhood || ''} ${a.vitalSign || ''}`.toLowerCase();
+                    const nameB = `${b.neighborhood || ''} ${b.vitalSign || ''}`.toLowerCase();
+                    return nameA.localeCompare(nameB);
+                })
+                .forEach(series => {
+                    if (!series || !series.points || series.points.length === 0) return;
+
+                    const visiblePoints = series.points.filter(p => p.ts >= minTs);
+                    if (visiblePoints.length === 0) return;
+
                     hasAny = true;
 
-                    const points = buildPolylinePoints(series.values, 300, 100);
-                    const current = series.values[series.values.length - 1];
-                    const min = Math.min(...series.values);
-                    const max = Math.max(...series.values);
+                    const points = buildPolylinePoints(visiblePoints, 300, 100, minTs, nowTs);
+                    const values = visiblePoints.map(p => p.value);
+                    const current = values[values.length - 1];
+                    const min = Math.min(...values);
+                    const max = Math.max(...values);
 
                     html += `
                         <div class="trend-card">
-                            <div class="trend-title">${escapeHtml(series.vitalSign)}</div>
-                            <div class="trend-subtitle">Neighborhood: ${escapeHtml(neighborhood)}</div>
+                            <div class="trend-title">${escapeHtml(series.vitalSign || '')}</div>
+                            <div class="trend-subtitle">Neighborhood: ${escapeHtml(series.neighborhood || '')}</div>
                             <div class="trend-current">${Number(current).toFixed(2)} ${escapeHtml(series.unit || '')}</div>
-                            <svg class="trend-svg" viewBox="0 0 320 120" preserveAspectRatio="none" role="img" aria-label="Trend chart for ${escapeHtml(series.vitalSign)}">
+                            <svg class="trend-svg" viewBox="0 0 320 120" preserveAspectRatio="none" role="img" aria-label="Trend chart for ${escapeHtml(series.vitalSign || '')}">
                                 <line x1="10" y1="110" x2="310" y2="110" stroke="#d9def7" stroke-width="1" />
                                 <line x1="10" y1="10" x2="10" y2="110" stroke="#d9def7" stroke-width="1" />
                                 <polyline fill="none" stroke="#667eea" stroke-width="2.2" points="${points}" />
                             </svg>
-                            <div class="trend-subtitle">Min: ${Number(min).toFixed(2)} · Max: ${Number(max).toFixed(2)} · Points: ${series.values.length}</div>
+                            <div class="trend-subtitle">Window: 1h · Min: ${Number(min).toFixed(2)} · Max: ${Number(max).toFixed(2)} · Points: ${visiblePoints.length}</div>
                         </div>
                     `;
                 });
-            });
 
             html += '</div>';
             if (!hasAny) {
@@ -564,8 +617,9 @@
             return html;
         }
 
-        function buildPolylinePoints(values, width, height) {
-            if (!values || values.length === 0) return '';
+        function buildPolylinePoints(points, width, height, minTs, maxTs) {
+            if (!points || points.length === 0) return '';
+            const values = points.map(p => Number(p.value || 0));
             const min = Math.min(...values);
             const max = Math.max(...values);
             const range = (max - min) || 1;
@@ -574,14 +628,17 @@
             const right = width + 10;
             const top = 10;
             const bottom = height + 10;
+            const tsRange = Math.max(1, (maxTs || Date.now()) - (minTs || (Date.now() - TREND_WINDOW_MS)));
 
-            if (values.length === 1) {
-                const y = bottom - ((values[0] - min) / range) * height;
-                return `${left},${y} ${right},${y}`;
+            if (points.length === 1) {
+                const y = bottom - ((points[0].value - min) / range) * height;
+                return `${right},${y} ${right},${y}`;
             }
 
-            return values.map((v, idx) => {
-                const x = left + (idx / (values.length - 1)) * width;
+            return points.map((point) => {
+                const normalizedTime = Math.min(1, Math.max(0, ((point.ts || minTs) - minTs) / tsRange));
+                const x = left + normalizedTime * width;
+                const v = Number(point.value || 0);
                 const y = bottom - ((v - min) / range) * height;
                 return `${x.toFixed(2)},${y.toFixed(2)}`;
             }).join(' ');
@@ -613,6 +670,7 @@
         
         // Load dashboard on page load and keep refreshing every 5 seconds
         window.addEventListener('load', () => {
+            loadTrendHistory();
             loadDashboard(true);
             startAutoRefresh();
         });
