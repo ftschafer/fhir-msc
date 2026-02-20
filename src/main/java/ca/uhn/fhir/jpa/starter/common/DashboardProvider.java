@@ -14,6 +14,7 @@ import jakarta.servlet.http.HttpServletResponse;
 import org.hl7.fhir.instance.model.api.IBaseResource;
 import org.hl7.fhir.r4.model.Condition;
 import org.hl7.fhir.r4.model.Extension;
+import org.hl7.fhir.r4.model.IdType;
 import org.hl7.fhir.r4.model.IntegerType;
 import org.hl7.fhir.r4.model.Observation;
 import org.hl7.fhir.r4.model.Patient;
@@ -24,11 +25,13 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.io.IOException;
 
 /**
@@ -40,6 +43,9 @@ public class DashboardProvider implements IResourceProvider {
 
     private static final String LOCATION_EXTENSION_URL = "http://patient-location";
     private static final String SAMPLE_COUNT_EXTENSION_URL = "http://observation-sample-count";
+    private static final String NEWS2_AGG_IDENTIFIER_SYSTEM = "urn:aggregate:news2";
+    private static final String NEWS2_AGG_CODE_SYSTEM = "http://loinc.org";
+    private static final String NEWS2_AGG_CODE = "news2-avg";
 
     @PersistenceContext
     private EntityManager em;
@@ -78,9 +84,17 @@ public class DashboardProvider implements IResourceProvider {
         PatientStats patientStats = collectPatientStats(cityFilter);
         ConditionCounts conditionCounts = collectConditionCounts(cityFilter);
 
-        int totalScore = patientStats.totalScore;
         int totalPatients = patientStats.totalPatients;
-        double avgNews2 = totalPatients == 0 ? 0.0 : (double) totalScore / totalPatients;
+        Map<String, News2Accumulator> cityNews2Acc = new HashMap<>();
+        Map<String, News2Accumulator> neighborhoodNews2Acc = new HashMap<>();
+        loadNeighborhoodNews2Averages(cityFilter, cityNews2Acc, neighborhoodNews2Acc);
+
+        News2Accumulator allCitiesNews2 = new News2Accumulator();
+        for (News2Accumulator acc : cityNews2Acc.values()) {
+            allCitiesNews2.merge(acc);
+        }
+
+        double avgNews2 = allCitiesNews2.hasSamples() ? allCitiesNews2.average() : 0.0;
         long totalConditions = conditionCounts.total;
 
         Map<String, Map<String, VitalSignAccumulator>> cityVitalAcc = new HashMap<>();
@@ -90,7 +104,8 @@ public class DashboardProvider implements IResourceProvider {
 
         List<Map<String, Object>> cityStats = new ArrayList<>();
         for (CityAccumulator c : patientStats.cityAcc.values()) {
-            double cAvg = c.patientCount == 0 ? 0.0 : (double) c.totalScore / c.patientCount;
+            News2Accumulator cityAgg = cityNews2Acc.get(news2CityKey(c.city));
+            double cAvg = (cityAgg != null && cityAgg.hasSamples()) ? cityAgg.average() : 0.0;
             Map<String, Object> item = new LinkedHashMap<>();
             item.put("city", c.city);
             item.put("patientCount", c.patientCount);
@@ -102,7 +117,10 @@ public class DashboardProvider implements IResourceProvider {
 
         List<Map<String, Object>> neighborhoodStats = new ArrayList<>();
         for (NeighborhoodAccumulator n : patientStats.neighborhoodAcc.values()) {
-            double avg = n.patientCount == 0 ? 0.0 : (double) n.totalScore / n.patientCount;
+            News2Accumulator neighborhoodAgg = neighborhoodNews2Acc.get(news2NeighborhoodKey(n.city, n.neighborhood));
+            double avg = (neighborhoodAgg != null && neighborhoodAgg.hasSamples())
+                ? neighborhoodAgg.average()
+                : 0.0;
             Map<String, Object> item = new LinkedHashMap<>();
             item.put("city", n.city);
             item.put("neighborhood", n.neighborhood);
@@ -190,7 +208,6 @@ public class DashboardProvider implements IResourceProvider {
 
             int score = extractPatientNews2Score(patient, fallbackScores);
             out.totalPatients++;
-            out.totalScore += score;
 
             String cityKey = asString(city);
             CityAccumulator c = out.cityAcc.get(cityKey);
@@ -199,7 +216,6 @@ public class DashboardProvider implements IResourceProvider {
                 out.cityAcc.put(cityKey, c);
             }
             c.patientCount++;
-            c.totalScore += score;
 
             if (block == null || block.isBlank()) {
                 continue;
@@ -212,7 +228,6 @@ public class DashboardProvider implements IResourceProvider {
                 out.neighborhoodAcc.put(nKey, n);
             }
             n.patientCount++;
-            n.totalScore += score;
 
             String bKey = key(city, neighborhood, block);
             BlockAccumulator b = out.blockAcc.get(bKey);
@@ -423,17 +438,7 @@ public class DashboardProvider implements IResourceProvider {
         ConditionCounts out = new ConditionCounts();
 
         IFhirResourceDao<Patient> patientDao = daoRegistry.getResourceDao(Patient.class);
-        SearchParameterMap patientSearch = new SearchParameterMap();
-        patientSearch.setLoadSynchronous(true);
-        List<IBaseResource> patients = getAllResources(patientDao.search(patientSearch));
-
-        Map<String, LocationTuple> patientLocation = new HashMap<>();
-        for (IBaseResource resource : patients) {
-            if (!(resource instanceof Patient patient)) continue;
-            String pid = patient.getIdElement() != null ? patient.getIdElement().getIdPart() : null;
-            if (pid == null || pid.isBlank()) continue;
-            patientLocation.put(pid, resolvePatientLocation(patient));
-        }
+        Map<String, LocationTuple> patientLocationCache = new HashMap<>();
 
         IFhirResourceDao<Condition> conditionDao = daoRegistry.getResourceDao(Condition.class);
         SearchParameterMap conditionSearch = new SearchParameterMap();
@@ -448,9 +453,23 @@ public class DashboardProvider implements IResourceProvider {
             String neighborhood = extractLocationNested(condition, "neighborhood");
             String block = extractLocationNested(condition, "block");
 
-            if ((block == null || block.isBlank()) && condition.getSubject() != null && condition.getSubject().getReferenceElement() != null) {
+            boolean needsPatientLocation = (block == null || block.isBlank())
+                    || (city == null || city.isBlank())
+                    || (neighborhood == null || neighborhood.isBlank());
+
+            if (needsPatientLocation && condition.getSubject() != null && condition.getSubject().getReferenceElement() != null) {
                 String pid = condition.getSubject().getReferenceElement().getIdPart();
-                LocationTuple fromPatient = patientLocation.get(pid);
+                LocationTuple fromPatient = patientLocationCache.get(pid);
+                if (fromPatient == null && pid != null && !pid.isBlank()) {
+                    try {
+                        Patient patient = patientDao.read(new IdType("Patient", pid), null);
+                        if (patient != null) {
+                            fromPatient = resolvePatientLocation(patient);
+                            patientLocationCache.put(pid, fromPatient);
+                        }
+                    } catch (Exception ignored) {
+                    }
+                }
                 if (fromPatient != null) {
                     if (city == null || city.isBlank()) city = fromPatient.city;
                     if (neighborhood == null || neighborhood.isBlank()) neighborhood = fromPatient.neighborhood;
@@ -595,6 +614,188 @@ public class DashboardProvider implements IResourceProvider {
         return null;
     }
 
+    @SuppressWarnings("deprecation")
+    private void loadNeighborhoodNews2Averages(
+            String cityFilter,
+            Map<String, News2Accumulator> cityAcc,
+            Map<String, News2Accumulator> neighborhoodAcc
+    ) {
+        Map<String, String> neighborhoodToCity = new HashMap<>();
+        List<Object[]> neighborhoodRows = em.createQuery(
+                "SELECT DISTINCT b.id.neighborhood, b.id.city FROM BlockNews2Aggregate b " +
+                        "WHERE b.id.neighborhood IS NOT NULL AND b.id.neighborhood <> '' " +
+                        "AND b.id.city IS NOT NULL AND b.id.city <> ''",
+                Object[].class
+        ).getResultList();
+        for (Object[] row : neighborhoodRows) {
+            String neighborhood = normalize(asString(row[0]));
+            String city = normalize(asString(row[1]));
+            if (neighborhood != null && city != null) {
+                neighborhoodToCity.put(neighborhood.toLowerCase(Locale.ROOT), city);
+            }
+        }
+
+        IFhirResourceDao<Observation> observationDao = daoRegistry.getResourceDao(Observation.class);
+
+        SearchParameterMap search = new SearchParameterMap();
+        TokenParam identifierSystem = new TokenParam();
+        identifierSystem.setSystem(NEWS2_AGG_IDENTIFIER_SYSTEM);
+        search.add("identifier", identifierSystem);
+        search.setLoadSynchronous(true);
+
+        List<News2ScopeObservation> parsed = new ArrayList<>();
+        Set<String> citiesWithDirectAverage = new HashSet<>();
+
+        List<IBaseResource> observations = getAllResources(observationDao.search(search));
+        for (IBaseResource resource : observations) {
+            if (!(resource instanceof Observation obs)) continue;
+            News2ScopeObservation scopeObs = toNews2ScopeObservation(obs, neighborhoodToCity);
+            if (scopeObs == null) continue;
+            if (cityFilter != null && !cityFilter.equalsIgnoreCase(scopeObs.city)) continue;
+
+            parsed.add(scopeObs);
+            if ("city".equals(scopeObs.scopeType)) {
+                citiesWithDirectAverage.add(news2CityKey(scopeObs.city));
+            }
+        }
+
+        for (News2ScopeObservation scopeObs : parsed) {
+            if ("city".equals(scopeObs.scopeType)) {
+                accumulateNews2(cityAcc, news2CityKey(scopeObs.city), scopeObs.averageValue, scopeObs.sampleCount);
+                continue;
+            }
+
+            if ("neighborhood".equals(scopeObs.scopeType)) {
+                if (scopeObs.neighborhood != null && !scopeObs.neighborhood.isBlank()) {
+                    accumulateNews2(
+                            neighborhoodAcc,
+                            news2NeighborhoodKey(scopeObs.city, scopeObs.neighborhood),
+                            scopeObs.averageValue,
+                            scopeObs.sampleCount
+                    );
+                }
+
+                String cityKey = news2CityKey(scopeObs.city);
+                if (!citiesWithDirectAverage.contains(cityKey)) {
+                    accumulateNews2(cityAcc, cityKey, scopeObs.averageValue, scopeObs.sampleCount);
+                }
+                continue;
+            }
+
+            if ("block".equals(scopeObs.scopeType)) {
+                String cityKey = news2CityKey(scopeObs.city);
+                if (!citiesWithDirectAverage.contains(cityKey)) {
+                    accumulateNews2(cityAcc, cityKey, scopeObs.averageValue, scopeObs.sampleCount);
+                }
+            }
+        }
+    }
+
+    private News2ScopeObservation toNews2ScopeObservation(Observation obs, Map<String, String> neighborhoodToCity) {
+        if (obs == null) return null;
+        if (!(obs.getValue() instanceof Quantity q) || q.getValue() == null) return null;
+
+        AggregateIdentifierInfo idInfo = extractAggregateIdentifierInfo(obs);
+        if (idInfo == null) return null;
+
+        String city = extractLocationNested(obs, "city");
+        String neighborhood = extractLocationNested(obs, "neighborhood");
+
+        if ("city".equals(idInfo.scopeType) && (city == null || city.isBlank())) {
+            city = idInfo.scopeValue;
+        }
+        if ("neighborhood".equals(idInfo.scopeType) && (neighborhood == null || neighborhood.isBlank())) {
+            neighborhood = idInfo.scopeValue;
+        }
+
+        if ((city == null || city.isBlank()) && neighborhood != null && !neighborhood.isBlank()) {
+            String mappedCity = neighborhoodToCity.get(neighborhood.toLowerCase(Locale.ROOT));
+            if (mappedCity != null && !mappedCity.isBlank()) {
+                city = mappedCity;
+            }
+        }
+
+        if (city == null || city.isBlank()) {
+            city = defaultCity;
+        }
+
+        News2ScopeObservation out = new News2ScopeObservation();
+        out.scopeType = idInfo.scopeType;
+        out.city = normalize(city);
+        out.neighborhood = normalize(neighborhood);
+        out.averageValue = q.getValue().doubleValue();
+        out.sampleCount = extractSampleCount(obs);
+        return out;
+    }
+
+    private AggregateIdentifierInfo extractAggregateIdentifierInfo(Observation obs) {
+        if (obs == null || !obs.hasIdentifier()) return null;
+
+        boolean codeMatches = obs.getCode() != null && obs.getCode().getCoding().stream().anyMatch(c ->
+                c != null
+                        && NEWS2_AGG_CODE.equals(c.getCode())
+                        && (c.getSystem() == null || NEWS2_AGG_CODE_SYSTEM.equals(c.getSystem()))
+        );
+
+        for (Identifier id : obs.getIdentifier()) {
+            if (id == null || id.getSystem() == null) continue;
+            if (!NEWS2_AGG_IDENTIFIER_SYSTEM.equals(id.getSystem())) continue;
+
+            String value = normalize(id.getValue());
+            if (value == null) {
+                if (codeMatches) {
+                    AggregateIdentifierInfo fallback = new AggregateIdentifierInfo();
+                    fallback.scopeType = "neighborhood";
+                    fallback.scopeValue = null;
+                    return fallback;
+                }
+                continue;
+            }
+
+            String lower = value.toLowerCase(Locale.ROOT);
+            String[] parts = value.split("\\|", 2);
+            String scopeValue = normalize(parts[0]);
+
+            AggregateIdentifierInfo info = new AggregateIdentifierInfo();
+            info.scopeValue = scopeValue;
+            if (lower.contains("city-average")) {
+                info.scopeType = "city";
+                return info;
+            }
+            if (lower.contains("neighborhood-average") || lower.contains("neighbourhood-average")) {
+                info.scopeType = "neighborhood";
+                return info;
+            }
+            if (lower.contains("block-average")) {
+                info.scopeType = "block";
+                return info;
+            }
+            if (codeMatches) {
+                info.scopeType = "neighborhood";
+                return info;
+            }
+        }
+        return null;
+    }
+
+    private int extractSampleCount(Observation obs) {
+        Extension sampleExt = obs.getExtensionByUrl(SAMPLE_COUNT_EXTENSION_URL);
+        if (sampleExt != null && sampleExt.getValue() instanceof IntegerType it && it.getValue() != null) {
+            return Math.max(1, it.getValue());
+        }
+        return 1;
+    }
+
+    private void accumulateNews2(Map<String, News2Accumulator> root, String scopeKey, double averageValue, int sampleCount) {
+        if (scopeKey == null || scopeKey.isBlank()) return;
+        News2Accumulator acc = root.get(scopeKey);
+        if (acc == null) {
+            acc = new News2Accumulator();
+            root.put(scopeKey, acc);
+        }
+        acc.add(averageValue, sampleCount);
+    }
+
     private VitalSignAverage fromObservation(Observation obs) {
         if (obs == null || !(obs.getValue() instanceof Quantity q) || q.getValue() == null) return null;
         VitalSignAverage out = new VitalSignAverage();
@@ -664,10 +865,20 @@ public class DashboardProvider implements IResourceProvider {
         return all;
     }
 
+    private String news2CityKey(String city) {
+        String normalized = normalize(city);
+        return normalized == null ? "" : normalized.toLowerCase(Locale.ROOT);
+    }
+
+    private String news2NeighborhoodKey(String city, String neighborhood) {
+        String c = normalize(city);
+        String n = normalize(neighborhood);
+        return (c == null ? "" : c.toLowerCase(Locale.ROOT)) + "|" + (n == null ? "" : n.toLowerCase(Locale.ROOT));
+    }
+
     private static class NeighborhoodAccumulator {
         private final String city;
         private final String neighborhood;
-        private int totalScore;
         private int patientCount;
 
         private NeighborhoodAccumulator(String city, String neighborhood) {
@@ -729,7 +940,6 @@ public class DashboardProvider implements IResourceProvider {
 
     private static class PatientStats {
         private int totalPatients;
-        private int totalScore;
         private final Map<String, CityAccumulator> cityAcc = new LinkedHashMap<>();
         private final Map<String, NeighborhoodAccumulator> neighborhoodAcc = new LinkedHashMap<>();
         private final Map<String, BlockAccumulator> blockAcc = new LinkedHashMap<>();
@@ -738,7 +948,6 @@ public class DashboardProvider implements IResourceProvider {
     private static class CityAccumulator {
         private final String city;
         private int patientCount;
-        private int totalScore;
 
         private CityAccumulator(String city) {
             this.city = city;
@@ -767,5 +976,43 @@ public class DashboardProvider implements IResourceProvider {
             this.scope = scope;
             this.block = block;
         }
+    }
+
+    private static class News2Accumulator {
+        private double weightedValueSum;
+        private int totalSamples;
+
+        private void add(double averageValue, int sampleCount) {
+            int weight = sampleCount > 0 ? sampleCount : 1;
+            weightedValueSum += averageValue * weight;
+            totalSamples += weight;
+        }
+
+        private void merge(News2Accumulator other) {
+            if (other == null) return;
+            this.weightedValueSum += other.weightedValueSum;
+            this.totalSamples += other.totalSamples;
+        }
+
+        private boolean hasSamples() {
+            return totalSamples > 0;
+        }
+
+        private double average() {
+            return totalSamples <= 0 ? 0.0 : weightedValueSum / totalSamples;
+        }
+    }
+
+    private static class AggregateIdentifierInfo {
+        private String scopeType;
+        private String scopeValue;
+    }
+
+    private static class News2ScopeObservation {
+        private String scopeType;
+        private String city;
+        private String neighborhood;
+        private double averageValue;
+        private int sampleCount;
     }
 }

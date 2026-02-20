@@ -289,9 +289,68 @@
         const REFRESH_MS = 5000;
         const TREND_WINDOW_MS = 60 * 60 * 1000; // 1 hour
         const MAX_POINTS = 5000; // safety cap
+        const TREND_STORAGE_KEY = 'cityVitalTrendHistory.v1';
         let autoRefreshHandle = null;
         let isLoadingDashboard = false;
         const cityVitalTrendHistory = new Map();
+
+        function pruneTrendSeries(series, nowMs) {
+            if (!series || !Array.isArray(series.times)) return;
+            while (series.times.length > 0 && (nowMs - series.times[0]) > TREND_WINDOW_MS) {
+                series.values.shift();
+                series.labels.shift();
+                series.times.shift();
+            }
+            while (series.values.length > MAX_POINTS) {
+                series.values.shift();
+                series.labels.shift();
+                series.times.shift();
+            }
+        }
+
+        function saveTrendHistory() {
+            try {
+                const payload = [];
+                cityVitalTrendHistory.forEach((series, key) => {
+                    payload.push([key, series]);
+                });
+                localStorage.setItem(TREND_STORAGE_KEY, JSON.stringify(payload));
+            } catch (e) {
+                // ignore storage issues
+            }
+        }
+
+        function loadTrendHistoryFromStorage() {
+            try {
+                const raw = localStorage.getItem(TREND_STORAGE_KEY);
+                if (!raw) return;
+                const entries = JSON.parse(raw);
+                if (!Array.isArray(entries)) return;
+
+                const nowMs = Date.now();
+                entries.forEach(entry => {
+                    if (!Array.isArray(entry) || entry.length !== 2) return;
+                    const key = entry[0];
+                    const series = entry[1];
+                    if (!key || !series) return;
+
+                    const hydrated = {
+                        city: series.city || '',
+                        vitalSign: series.vitalSign || '',
+                        unit: series.unit || '',
+                        values: Array.isArray(series.values) ? series.values.map(v => Number(v || 0)) : [],
+                        labels: Array.isArray(series.labels) ? series.labels.map(v => String(v || '')) : [],
+                        times: Array.isArray(series.times) ? series.times.map(v => Number(v || 0)) : []
+                    };
+                    pruneTrendSeries(hydrated, nowMs);
+                    if (hydrated.values.length > 0) {
+                        cityVitalTrendHistory.set(key, hydrated);
+                    }
+                });
+            } catch (e) {
+                // ignore malformed storage
+            }
+        }
 
         function escapeHtml(text) {
             const map = {
@@ -347,20 +406,11 @@
                     series.values.push(Number(v.averageValue || 0));
                     series.labels.push(timestamp);
                     series.times.push(nowMs);
-
-                    while (series.times.length > 0 && (nowMs - series.times[0]) > TREND_WINDOW_MS) {
-                        series.values.shift();
-                        series.labels.shift();
-                        series.times.shift();
-                    }
-
-                    if (series.values.length > MAX_POINTS) {
-                        series.values.shift();
-                        series.labels.shift();
-                        series.times.shift();
-                    }
+                    pruneTrendSeries(series, nowMs);
                 });
             });
+
+            saveTrendHistory();
         }
 
         function buildPolylinePoints(values, width, height) {
@@ -390,36 +440,35 @@
                 return '<div class="empty">No trend data available</div>';
             }
 
+            const nowMs = Date.now();
+            cityVitalTrendHistory.forEach(series => pruneTrendSeries(series, nowMs));
+
             let html = '<div class="trend-grid">';
             let hasAny = false;
-            data.cityStats.forEach(cs => {
-                const city = cs.city || '';
-                const vitals = Array.isArray(cs.vitalSignAverages) ? cs.vitalSignAverages : [];
-                vitals.forEach(v => {
-                    const key = makeCityTrendKey(city, v.vitalSign);
-                    const series = cityVitalTrendHistory.get(key);
-                    if (!series || !series.values || series.values.length === 0) return;
+            const visibleCities = new Set((data.cityStats || []).map(cs => cs.city || ''));
+            cityVitalTrendHistory.forEach(series => {
+                if (!series || !Array.isArray(series.values) || series.values.length === 0) return;
+                if (visibleCities.size > 0 && !visibleCities.has(series.city || '')) return;
 
-                    hasAny = true;
-                    const points = buildPolylinePoints(series.values, 300, 100);
-                    const current = series.values[series.values.length - 1];
-                    const min = Math.min(...series.values);
-                    const max = Math.max(...series.values);
+                hasAny = true;
+                const points = buildPolylinePoints(series.values, 300, 100);
+                const current = series.values[series.values.length - 1];
+                const min = Math.min(...series.values);
+                const max = Math.max(...series.values);
 
-                    html += `
-                        <div class="trend-card">
-                            <div class="trend-title">${escapeHtml(series.vitalSign)}</div>
-                            <div class="trend-subtitle">City: ${escapeHtml(city)}</div>
-                            <div class="trend-current">${Number(current).toFixed(4)} ${escapeHtml(series.unit || '')}</div>
-                            <svg class="trend-svg" viewBox="0 0 320 120" preserveAspectRatio="none">
-                                <line x1="10" y1="110" x2="310" y2="110" stroke="#d9def7" stroke-width="1" />
-                                <line x1="10" y1="10" x2="10" y2="110" stroke="#d9def7" stroke-width="1" />
-                                <polyline fill="none" stroke="#667eea" stroke-width="2.2" points="${points}" />
-                            </svg>
-                            <div class="trend-subtitle">Min: ${Number(min).toFixed(4)} · Max: ${Number(max).toFixed(4)} · Points: ${series.values.length} · Window: last 60m</div>
-                        </div>
-                    `;
-                });
+                html += `
+                    <div class="trend-card">
+                        <div class="trend-title">${escapeHtml(series.vitalSign)}</div>
+                        <div class="trend-subtitle">City: ${escapeHtml(series.city || '')}</div>
+                        <div class="trend-current">${Number(current).toFixed(4)} ${escapeHtml(series.unit || '')}</div>
+                        <svg class="trend-svg" viewBox="0 0 320 120" preserveAspectRatio="none">
+                            <line x1="10" y1="110" x2="310" y2="110" stroke="#d9def7" stroke-width="1" />
+                            <line x1="10" y1="10" x2="10" y2="110" stroke="#d9def7" stroke-width="1" />
+                            <polyline fill="none" stroke="#667eea" stroke-width="2.2" points="${points}" />
+                        </svg>
+                        <div class="trend-subtitle">Min: ${Number(min).toFixed(4)} · Max: ${Number(max).toFixed(4)} · Points: ${series.values.length} · Window: last 60m</div>
+                    </div>
+                `;
             });
 
             html += '</div>';
@@ -504,10 +553,10 @@
                     `;
                 });
                 html += '</div>';
-
-                html += '<h2 class="section-title">City Vital Sign Trends (Live)</h2>';
-                html += renderCityTrendCharts(data);
             }
+
+            html += '<h2 class="section-title">City Vital Sign Trends (Live)</h2>';
+            html += renderCityTrendCharts(data);
 
             const neighborhoodStats = Array.isArray(data.neighborhoodStats) ? data.neighborhoodStats : [];
             if (neighborhoodStats.length > 0) {
@@ -653,6 +702,7 @@
         }
 
         window.addEventListener('load', () => {
+            loadTrendHistoryFromStorage();
             loadDashboard(true);
             startAutoRefresh();
         });

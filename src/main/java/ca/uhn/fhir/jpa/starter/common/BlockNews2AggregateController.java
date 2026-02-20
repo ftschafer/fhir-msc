@@ -1,5 +1,10 @@
 package ca.uhn.fhir.jpa.starter.common;
 
+import ca.uhn.fhir.jpa.api.dao.DaoRegistry;
+import ca.uhn.fhir.jpa.api.dao.IFhirResourceDao;
+import ca.uhn.fhir.jpa.searchparam.SearchParameterMap;
+import ca.uhn.fhir.rest.api.server.IBundleProvider;
+import ca.uhn.fhir.rest.param.TokenParam;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.HttpStatus;
@@ -7,17 +12,36 @@ import org.springframework.beans.factory.annotation.Value;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.PersistenceContext;
 import jakarta.transaction.Transactional;
+import org.hl7.fhir.instance.model.api.IBaseResource;
+import org.hl7.fhir.r4.model.Extension;
+import org.hl7.fhir.r4.model.Identifier;
+import org.hl7.fhir.r4.model.IntegerType;
+import org.hl7.fhir.r4.model.Observation;
+import org.hl7.fhir.r4.model.Quantity;
 import java.util.*;
 
 @RestController
 @RequestMapping("/city-details")
 public class BlockNews2AggregateController {
 
+    private static final String LOCATION_EXTENSION_URL = "http://patient-location";
+    private static final String SAMPLE_COUNT_EXTENSION_URL = "http://observation-sample-count";
+    private static final String NEWS2_AGG_IDENTIFIER_SYSTEM = "urn:aggregate:news2";
+    private static final String NEWS2_AGG_IDENTIFIER_SUFFIX = "|neighborhood-average";
+    private static final String NEWS2_AGG_CODE_SYSTEM = "http://loinc.org";
+    private static final String NEWS2_AGG_CODE = "news2-avg";
+
     @Value("${location.city}")
     private String locationCity;
 
+    private final DaoRegistry daoRegistry;
+
     @PersistenceContext
     private EntityManager em;
+
+    public BlockNews2AggregateController(DaoRegistry daoRegistry) {
+        this.daoRegistry = daoRegistry;
+    }
 
     @GetMapping("/block-average")
     @Transactional
@@ -55,21 +79,23 @@ public class BlockNews2AggregateController {
     ) {
         String cityValue = (city == null || city.isBlank()) ? locationCity : city;
         String where = (neighborhood == null || neighborhood.isBlank())
-                ? " WHERE b.id.city = :city"
-                : " WHERE b.id.neighborhood = :neighborhood AND b.id.city = :city";
+            ? " WHERE b.id.city = :city"
+            : " WHERE b.id.neighborhood = :neighborhood AND b.id.city = :city";
+        News2Accumulator fromNeighborhoodAverages = aggregateCityNews2FromNeighborhoodObservations(cityValue, neighborhood);
 
-        var totalsQuery = em.createQuery(
-                "SELECT COALESCE(SUM(b.totalScore),0), COALESCE(SUM(b.patientCount),0) FROM BlockNews2Aggregate b" + where,
-                Object[].class
-        ).setParameter("city", cityValue);
-        if (neighborhood != null && !neighborhood.isBlank()) {
-            totalsQuery.setParameter("neighborhood", neighborhood);
+        double totalScore;
+        int patientCount;
+        double average;
+
+        if (fromNeighborhoodAverages.hasSamples()) {
+            totalScore = fromNeighborhoodAverages.weightedValueSum;
+            patientCount = fromNeighborhoodAverages.totalSamples;
+            average = fromNeighborhoodAverages.average();
+        } else {
+            totalScore = 0.0;
+            patientCount = 0;
+            average = 0.0;
         }
-        Object[] totals = totalsQuery.getSingleResult();
-
-        int totalScore = ((Number) totals[0]).intValue();
-        int patientCount = ((Number) totals[1]).intValue();
-        double average = patientCount == 0 ? 0.0 : (double) totalScore / patientCount;
 
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("neighborhood", neighborhood);
@@ -97,6 +123,134 @@ public class BlockNews2AggregateController {
         }
         result.put("blocks", blocks);
         return result;
+    }
+
+    @SuppressWarnings("deprecation")
+    private News2Accumulator aggregateCityNews2FromNeighborhoodObservations(String city, String neighborhoodFilter) {
+        News2Accumulator acc = new News2Accumulator();
+
+        IFhirResourceDao<Observation> observationDao = daoRegistry.getResourceDao(Observation.class);
+        SearchParameterMap search = new SearchParameterMap();
+        TokenParam identifierSystem = new TokenParam();
+        identifierSystem.setSystem(NEWS2_AGG_IDENTIFIER_SYSTEM);
+        search.add("identifier", identifierSystem);
+        search.setLoadSynchronous(true);
+
+        List<IBaseResource> resources = getAllResources(observationDao.search(search));
+        for (IBaseResource resource : resources) {
+            if (!(resource instanceof Observation obs)) continue;
+            if (!isNeighborhoodNews2Aggregate(obs)) continue;
+            if (!(obs.getValue() instanceof Quantity q) || q.getValue() == null) continue;
+
+            String obsCity = extractLocationNested(obs, "city");
+            if (obsCity == null || obsCity.isBlank()) {
+                obsCity = locationCity;
+            }
+            if (city != null && !city.equalsIgnoreCase(obsCity)) continue;
+
+            String obsNeighborhood = extractLocationNested(obs, "neighborhood");
+            if (neighborhoodFilter != null && !neighborhoodFilter.isBlank()
+                    && (obsNeighborhood == null || !neighborhoodFilter.equalsIgnoreCase(obsNeighborhood))) {
+                continue;
+            }
+
+            int sampleCount = extractSampleCount(obs);
+            double averageValue = q.getValue().doubleValue();
+            acc.add(averageValue, sampleCount);
+        }
+        return acc;
+    }
+
+    private boolean isNeighborhoodNews2Aggregate(Observation obs) {
+        if (obs == null) return false;
+
+        boolean codeMatches = obs.getCode() != null && obs.getCode().getCoding().stream().anyMatch(c ->
+                c != null
+                        && NEWS2_AGG_CODE.equals(c.getCode())
+                        && (c.getSystem() == null || NEWS2_AGG_CODE_SYSTEM.equals(c.getSystem()))
+        );
+        if (!obs.hasIdentifier()) return false;
+
+        for (Identifier id : obs.getIdentifier()) {
+            if (id == null || id.getSystem() == null) continue;
+            if (!NEWS2_AGG_IDENTIFIER_SYSTEM.equals(id.getSystem())) continue;
+
+            String value = id.getValue();
+            if (value == null || value.isBlank()) {
+                return true;
+            }
+
+            String normalizedValue = value.toLowerCase(Locale.ROOT);
+            if (normalizedValue.endsWith(NEWS2_AGG_IDENTIFIER_SUFFIX)
+                    || normalizedValue.contains("neighborhood-average")
+                    || normalizedValue.contains("neighbourhood-average")) {
+                return true;
+            }
+
+            if (codeMatches) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private String extractLocationNested(Observation obs, String url) {
+        if (obs == null) return null;
+        Extension loc = obs.getExtensionByUrl(LOCATION_EXTENSION_URL);
+        if (loc == null) return null;
+        for (Extension nested : loc.getExtension()) {
+            if (nested != null && url.equals(nested.getUrl()) && nested.getValue() != null) {
+                String value = nested.getValue().primitiveValue();
+                if (value != null) {
+                    String trimmed = value.trim();
+                    if (!trimmed.isEmpty()) return trimmed;
+                }
+            }
+        }
+        return null;
+    }
+
+    private int extractSampleCount(Observation obs) {
+        Extension sampleExt = obs.getExtensionByUrl(SAMPLE_COUNT_EXTENSION_URL);
+        if (sampleExt != null && sampleExt.getValue() instanceof IntegerType it && it.getValue() != null) {
+            return Math.max(1, it.getValue());
+        }
+        return 1;
+    }
+
+    private List<IBaseResource> getAllResources(IBundleProvider provider) {
+        if (provider == null) return List.of();
+        Integer size = provider.size();
+        if (size == null || size < 0) return provider.getAllResources();
+
+        List<IBaseResource> all = new ArrayList<>(size);
+        final int pageSize = 500;
+        for (int from = 0; from < size; from += pageSize) {
+            int to = Math.min(from + pageSize, size);
+            List<IBaseResource> page = provider.getResources(from, to);
+            if (page.isEmpty()) break;
+            all.addAll(page);
+        }
+        return all;
+    }
+
+    private static class News2Accumulator {
+        private double weightedValueSum;
+        private int totalSamples;
+
+        private void add(double averageValue, int sampleCount) {
+            int weight = sampleCount > 0 ? sampleCount : 1;
+            weightedValueSum += averageValue * weight;
+            totalSamples += weight;
+        }
+
+        private boolean hasSamples() {
+            return totalSamples > 0;
+        }
+
+        private double average() {
+            return totalSamples == 0 ? 0.0 : weightedValueSum / totalSamples;
+        }
     }
 
     // Get all neighborhoods in a city and their averages
