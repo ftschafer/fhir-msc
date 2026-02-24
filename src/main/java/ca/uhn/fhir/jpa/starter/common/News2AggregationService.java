@@ -3,12 +3,10 @@ package ca.uhn.fhir.jpa.starter.common;
 import ca.uhn.fhir.context.FhirContext;
 import ca.uhn.fhir.jpa.api.dao.DaoRegistry;
 import ca.uhn.fhir.jpa.api.dao.IFhirResourceDao;
-import ca.uhn.fhir.jpa.searchparam.SearchParameterMap;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.PersistenceContext;
-import org.hl7.fhir.instance.model.api.IBaseResource;
 import org.hl7.fhir.r4.model.*;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
@@ -213,13 +211,20 @@ public class News2AggregationService {
             patientModified = true;
         }
 
+        String patientBlock = extractBlock(patient);
+        if (patientBlock == null || patientBlock.isBlank()) {
+            patientBlock = blockValue;
+        }
+
+        upsertPatientNews2Current(patientId, patientBlock, total);
+
         if (patientModified) {
             patientDao().update(patient);
 
             meterRegistry.counter(METRIC_OUTCOME, "result", "changed").increment();
 
             Patient finalPatient = patient;
-            BlockAverageSnapshot blockAverage = computeBlockAverage(blockValue);
+        BlockAverageSnapshot blockAverage = computeBlockAverage(patientBlock);
 
             TransactionSynchronizationManager.registerSynchronization(
                     new PatientAndBlockForwardSync(finalPatient, blockAverage)
@@ -231,28 +236,29 @@ public class News2AggregationService {
     }
 
     private BlockAverageSnapshot computeBlockAverage(String block) {
-        SearchParameterMap search = new SearchParameterMap();
-        search.setLoadSynchronous(true);
+        Object result = em.createNativeQuery(
+                        "SELECT COALESCE(AVG(news2), 0), COUNT(*) FROM patient_news2_current WHERE block_id = ?")
+                .setParameter(1, block)
+                .getSingleResult();
 
-        List<IBaseResource> resources = patientDao().search(search).getAllResources();
-        double total = 0.0;
-        int count = 0;
+        Object[] row = (Object[]) result;
+        Number avgNum = (Number) row[0];
+        Number countNum = (Number) row[1];
 
-        for (IBaseResource resource : resources) {
-            Patient patient = (Patient) resource;
-            if (!Objects.equals(extractBlock(patient), block)) {
-                continue;
-            }
-
-            Extension news2Ext = patient.getExtensionByUrl(NEWS2_EXTENSION_URL);
-            if (news2Ext != null && news2Ext.getValue() instanceof IntegerType integerType && integerType.getValue() != null) {
-                total += integerType.getValue();
-                count++;
-            }
-        }
-
-        double average = count > 0 ? total / count : 0.0;
+        double average = avgNum == null ? 0.0 : avgNum.doubleValue();
+        int count = countNum == null ? 0 : countNum.intValue();
         return new BlockAverageSnapshot(block, average, count);
+    }
+
+    private void upsertPatientNews2Current(String patientId, String block, int news2) {
+        em.createNativeQuery(
+                        "MERGE INTO patient_news2_current (patient_id, block_id, news2, updated_at) " +
+                                "KEY(patient_id) VALUES (?, ?, ?, ?)")
+                .setParameter(1, patientId)
+                .setParameter(2, block)
+                .setParameter(3, news2)
+                .setParameter(4, java.sql.Timestamp.from(Instant.now()))
+                .executeUpdate();
     }
 
     private String extractBlock(Patient patient) {

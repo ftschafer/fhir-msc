@@ -26,6 +26,8 @@ import ca.uhn.fhir.rest.annotation.OperationParam;
 import ca.uhn.fhir.rest.api.server.IBundleProvider;
 import ca.uhn.fhir.rest.param.TokenParam;
 import ca.uhn.fhir.rest.server.IResourceProvider;
+import jakarta.persistence.EntityManager;
+import jakarta.persistence.PersistenceContext;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 
@@ -37,6 +39,9 @@ import jakarta.servlet.http.HttpServletResponse;
 public class DashboardProvider implements IResourceProvider {
 
     private final DaoRegistry daoRegistry;
+
+    @PersistenceContext
+    private EntityManager em;
     
     @Value("${hapi.fhir.location.block:}")
     private String currentBlock;
@@ -101,13 +106,10 @@ public class DashboardProvider implements IResourceProvider {
         IBundleProvider patientResults = patientDao.search(patientSearch);
         List<IBaseResource> patients = patientResults.getAllResources();
         
-        stats.totalPatients = patients.size();
-        
         // Process patients by location
         Map<String, LocationStats> locationMap = new HashMap<>();
         List<PatientSummary> patientList = new ArrayList<>();
-        double totalNews2 = 0;
-        int news2Count = 0;
+        int filteredPatientCount = 0;
         
         for (IBaseResource res : patients) {
             Patient patient = (Patient) res;
@@ -118,8 +120,6 @@ public class DashboardProvider implements IResourceProvider {
             Extension news2Ext = patient.getExtensionByUrl("http://news2-score");
             if (news2Ext != null && news2Ext.getValue() instanceof IntegerType) {
                 news2Score = ((IntegerType) news2Ext.getValue()).getValue();
-                totalNews2 += news2Score;
-                news2Count++;
             }
             
             // Get location
@@ -145,6 +145,8 @@ public class DashboardProvider implements IResourceProvider {
             if (filterBlock != null && !filterBlock.isEmpty() && !Objects.equals(location.trim().toLowerCase(Locale.ROOT), filterBlock.trim().toLowerCase(Locale.ROOT))) {
                 continue; // Skip patients not in the requested block
             }
+
+            filteredPatientCount++;
             
             // Add to location stats
             LocationStats locStats = locationMap.computeIfAbsent(location, k -> new LocationStats(k));
@@ -163,7 +165,8 @@ public class DashboardProvider implements IResourceProvider {
             patientList.add(ps);
         }
         
-        stats.avgNews2Score = news2Count > 0 ? totalNews2 / news2Count : 0;
+        stats.totalPatients = filteredPatientCount;
+        stats.avgNews2Score = queryProjectedAvgNews2(filterBlock);
         stats.locationStats = new ArrayList<>(locationMap.values());
         stats.patients = patientList;
         
@@ -222,6 +225,22 @@ public class DashboardProvider implements IResourceProvider {
             .collect(Collectors.toList());
         
         return stats;
+    }
+
+    private double queryProjectedAvgNews2(String filterBlock) {
+        Object result;
+        if (filterBlock != null && !filterBlock.isBlank()) {
+            result = em.createNativeQuery(
+                            "SELECT COALESCE(AVG(news2), 0) FROM patient_news2_current WHERE LOWER(block_id) = LOWER(?)")
+                    .setParameter(1, filterBlock)
+                    .getSingleResult();
+        } else {
+            result = em.createNativeQuery("SELECT COALESCE(AVG(news2), 0) FROM patient_news2_current")
+                    .getSingleResult();
+        }
+
+        Number avg = (Number) result;
+        return avg == null ? 0.0 : avg.doubleValue();
     }
 
     private String getRiskLevel(int news2Score) {
