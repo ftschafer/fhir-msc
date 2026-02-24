@@ -111,6 +111,19 @@ hapi:
     location:
       # Current layer: block (will add neighborhood and city in higher layers)
       block: "B71"
+
+    analysis:
+      socioeconomic:
+        # true = deterministic dummy income per patient/block
+        # false = read from Patient extension URL below, fallback to dummy if missing
+        use-dummy-income: false
+        income-extension-url: "http://average-income"
+        kmeans:
+          max-k: 4
+          runs: 8
+          min-silhouette: 0.2
+          min-cluster-size: 2
+          max-singleton-ratio: 0.2
     
     ### This flag when enabled to true, will avail evaluate measure operations from CR Module.
     ### Flag is false by default, can be passed as command line argument to override.

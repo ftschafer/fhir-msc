@@ -267,6 +267,29 @@
             </div>
 
             <div class="data-section">
+                <h2 class="section-title">🧠 Socioeconomic Cluster Profiles (K-Means)</h2>
+                <p style="color: #666; margin-bottom: 15px;">Dummy/extension-enriched block-level clustering by NEWS2, age, income, and seasonality.</p>
+                <p id="clusterQuality" style="color: #444; margin-bottom: 12px; font-size: 13px;"></p>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Cluster</th>
+                            <th>Patients</th>
+                            <th>Avg NEWS2</th>
+                            <th>Avg Age</th>
+                            <th>Avg Income</th>
+                            <th>Low Risk %</th>
+                            <th>Medium Risk %</th>
+                            <th>High Risk %</th>
+                            <th>Profile</th>
+                        </tr>
+                    </thead>
+                    <tbody id="clusterProfilesBody">
+                    </tbody>
+                </table>
+            </div>
+
+            <div class="data-section">
                 <h2 class="section-title">🩺 Active Conditions</h2>
                 <table>
                     <thead>
@@ -406,6 +429,40 @@
                 });
             } else {
                 patientsBody.innerHTML = '<tr><td colspan="4" style="text-align:center;">No patients found</td></tr>';
+            }
+
+            // Render socioeconomic cluster profiles
+            const clusterBody = document.getElementById('clusterProfilesBody');
+            const clusterQuality = document.getElementById('clusterQuality');
+            clusterBody.innerHTML = '';
+            const clusters = data.socioeconomicAnalysis?.clusterProfiles || [];
+            const q = data.socioeconomicAnalysis?.quality;
+            if (q) {
+                const warn = q.lowConfidence ? ` ⚠ low confidence (min ${toFixedSafe(q.minSilhouette, 3)})` : ' ✓ acceptable';
+                clusterQuality.textContent = `Quality: silhouette=${toFixedSafe(q.silhouetteScore, 3)} | selectedK=${q.selectedK ?? 'N/A'} | runs=${q.runCount ?? 'N/A'} | SSE=${toFixedSafe(q.withinClusterSse, 3)}${warn}`;
+                clusterQuality.style.color = q.lowConfidence ? '#b45309' : '#166534';
+            } else {
+                clusterQuality.textContent = 'Quality: not available (restart server to load latest analysis pipeline).';
+                clusterQuality.style.color = '#444';
+            }
+            if (clusters.length > 0) {
+                clusters.forEach(c => {
+                    clusterBody.innerHTML += `
+                        <tr>
+                            <td><strong>C${c.clusterId}</strong></td>
+                            <td>${c.patientCount ?? 0}</td>
+                            <td>${toFixedSafe(c.avgNews2, 2)}</td>
+                            <td>${toFixedSafe(c.avgAge, 1)}</td>
+                            <td>${toFixedSafe(c.avgIncome, 0)}</td>
+                            <td class="risk-low">${toFixedSafe(c.pctLowRisk, 1)}%</td>
+                            <td class="risk-medium">${toFixedSafe(c.pctMediumRisk, 1)}%</td>
+                            <td class="risk-high">${toFixedSafe(c.pctHighRisk, 1)}%</td>
+                            <td>${c.profileLabel || 'N/A'}</td>
+                        </tr>
+                    `;
+                });
+            } else {
+                clusterBody.innerHTML = '<tr><td colspan="9" style="text-align:center;">No cluster analysis available</td></tr>';
             }
 
             // Render conditions

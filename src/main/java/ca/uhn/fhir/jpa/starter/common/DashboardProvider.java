@@ -39,6 +39,7 @@ import jakarta.servlet.http.HttpServletResponse;
 public class DashboardProvider implements IResourceProvider {
 
     private final DaoRegistry daoRegistry;
+    private final BlockSocioeconomicAnalysisService socioeconomicAnalysisService;
 
     @PersistenceContext
     private EntityManager em;
@@ -51,8 +52,9 @@ public class DashboardProvider implements IResourceProvider {
     private long cacheTimestamp = 0;
     private static final long CACHE_DURATION_MS = 3000;
 
-    public DashboardProvider(DaoRegistry daoRegistry) {
+    public DashboardProvider(DaoRegistry daoRegistry, BlockSocioeconomicAnalysisService socioeconomicAnalysisService) {
         this.daoRegistry = daoRegistry;
+        this.socioeconomicAnalysisService = socioeconomicAnalysisService;
     }
 
     @Override
@@ -104,15 +106,17 @@ public class DashboardProvider implements IResourceProvider {
         SearchParameterMap patientSearch = new SearchParameterMap();
         patientSearch.setLoadSynchronous(true);
         IBundleProvider patientResults = patientDao.search(patientSearch);
-        List<IBaseResource> patients = patientResults.getAllResources();
+        List<Patient> patients = patientResults.getAllResources().stream()
+            .filter(Patient.class::isInstance)
+            .map(Patient.class::cast)
+            .collect(Collectors.toList());
         
         // Process patients by location
         Map<String, LocationStats> locationMap = new HashMap<>();
         List<PatientSummary> patientList = new ArrayList<>();
         int filteredPatientCount = 0;
         
-        for (IBaseResource res : patients) {
-            Patient patient = (Patient) res;
+        for (Patient patient : patients) {
             String patientId = patient.getIdElement().getIdPart();
             
             // Get NEWS2 score
@@ -169,6 +173,7 @@ public class DashboardProvider implements IResourceProvider {
         stats.avgNews2Score = queryProjectedAvgNews2(filterBlock);
         stats.locationStats = new ArrayList<>(locationMap.values());
         stats.patients = patientList;
+        stats.socioeconomicAnalysis = socioeconomicAnalysisService.analyze(patients, filterBlock, currentBlock);
         
         // Get active conditions
         IFhirResourceDao<Condition> conditionDao = daoRegistry.getResourceDao(Condition.class);
@@ -373,7 +378,40 @@ public class DashboardProvider implements IResourceProvider {
             json.append("\"location\":\"").append(escapeJson(vsa.location)).append("\"");
             json.append("}");
         }
-        json.append("]");
+        json.append("],");
+
+        // Socioeconomic cluster analysis
+        json.append("\"socioeconomicAnalysis\":{");
+        json.append("\"sampleSize\":").append(stats.socioeconomicAnalysis.sampleSize()).append(",");
+        json.append("\"clusterCount\":").append(stats.socioeconomicAnalysis.clusterCount()).append(",");
+        json.append("\"quality\":{");
+        json.append("\"selectedK\":").append(stats.socioeconomicAnalysis.quality().selectedK()).append(",");
+        json.append("\"silhouetteScore\":").append(String.format(Locale.US, "%.3f", stats.socioeconomicAnalysis.quality().silhouetteScore())).append(",");
+        json.append("\"runCount\":").append(stats.socioeconomicAnalysis.quality().runCount()).append(",");
+        json.append("\"withinClusterSse\":").append(String.format(Locale.US, "%.3f", stats.socioeconomicAnalysis.quality().withinClusterSse())).append(",");
+        json.append("\"minSilhouette\":").append(String.format(Locale.US, "%.3f", stats.socioeconomicAnalysis.quality().minSilhouette())).append(",");
+        json.append("\"lowConfidence\":").append(stats.socioeconomicAnalysis.quality().lowConfidence()).append(",");
+        json.append("\"minClusterSizeObserved\":").append(stats.socioeconomicAnalysis.quality().minClusterSizeObserved()).append(",");
+        json.append("\"singletonClusterCount\":").append(stats.socioeconomicAnalysis.quality().singletonClusterCount()).append(",");
+        json.append("\"adjustedSilhouetteScore\":").append(String.format(Locale.US, "%.3f", stats.socioeconomicAnalysis.quality().adjustedSilhouetteScore()));
+        json.append("},");
+        json.append("\"clusterProfiles\":[");
+        for (int i = 0; i < stats.socioeconomicAnalysis.clusterProfiles().size(); i++) {
+            BlockSocioeconomicAnalysisService.ClusterProfile profile = stats.socioeconomicAnalysis.clusterProfiles().get(i);
+            if (i > 0) json.append(",");
+            json.append("{");
+            json.append("\"clusterId\":").append(profile.clusterId()).append(",");
+            json.append("\"patientCount\":").append(profile.patientCount()).append(",");
+            json.append("\"avgNews2\":").append(String.format(Locale.US, "%.2f", profile.avgNews2())).append(",");
+            json.append("\"avgAge\":").append(String.format(Locale.US, "%.2f", profile.avgAge())).append(",");
+            json.append("\"avgIncome\":").append(String.format(Locale.US, "%.2f", profile.avgIncome())).append(",");
+            json.append("\"pctLowRisk\":").append(String.format(Locale.US, "%.2f", profile.pctLowRisk())).append(",");
+            json.append("\"pctMediumRisk\":").append(String.format(Locale.US, "%.2f", profile.pctMediumRisk())).append(",");
+            json.append("\"pctHighRisk\":").append(String.format(Locale.US, "%.2f", profile.pctHighRisk())).append(",");
+            json.append("\"profileLabel\":\"").append(escapeJson(profile.profileLabel())).append("\"");
+            json.append("}");
+        }
+        json.append("]}");
         
         json.append("}");
         
@@ -398,6 +436,8 @@ public class DashboardProvider implements IResourceProvider {
         List<PatientSummary> patients = new ArrayList<>();
         List<ConditionSummary> conditions = new ArrayList<>();
         List<VitalSignAverage> vitalSignAverages = new ArrayList<>();
+        BlockSocioeconomicAnalysisService.AnalysisOutput socioeconomicAnalysis =
+            BlockSocioeconomicAnalysisService.AnalysisOutput.empty();
     }
 
     static class LocationStats {
