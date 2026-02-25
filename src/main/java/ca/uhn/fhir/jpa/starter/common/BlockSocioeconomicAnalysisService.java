@@ -104,7 +104,7 @@ public class BlockSocioeconomicAnalysisService {
     private KMeansSelectionResult selectBestModel(List<double[]> normalized) {
         int n = normalized.size();
         if (n < 2) {
-            return new KMeansSelectionResult(1, new int[]{0}, 0.0, 0.0, 1);
+            return new KMeansSelectionResult(1, new int[]{0}, 0.0, 0.0, 0.0, 1, 1, 0, false);
         }
 
         int maxK = Math.max(2, Math.min(configuredMaxK, n - 1));

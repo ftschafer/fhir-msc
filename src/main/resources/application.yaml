@@ -124,6 +124,24 @@ hapi:
           min-silhouette: 0.2
           min-cluster-size: 2
           max-singleton-ratio: 0.2
+
+    measure-report:
+      block-health:
+        measure: "Measure/block-health-aggregation"
+        identifier-system: "urn:block:health-aggregation"
+        id-prefix: "block-health-aggregation"
+        period-start: "2026-02-01"
+        period-end: "2026-02-28"
+        location-extension-url: "http://patient-location"
+        block-extension-url: "block"
+        group-text: "Block Summary"
+        avg-income: 3200
+        avg-income-unit: "BRL/month"
+        care-units: 4
+        care-units-unit: "units"
+        mean-age: 42.5
+        mean-age-unit: "years"
+        seasonality: "summer"
     
     ### This flag when enabled to true, will avail evaluate measure operations from CR Module.
     ### Flag is false by default, can be passed as command line argument to override.

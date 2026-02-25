@@ -9,6 +9,7 @@ import java.util.concurrent.locks.LockSupport;
 import org.hl7.fhir.r4.model.Bundle;
 import org.hl7.fhir.r4.model.Condition;
 import org.hl7.fhir.r4.model.Extension;
+import org.hl7.fhir.r4.model.MeasureReport;
 import org.hl7.fhir.r4.model.Observation;
 import org.hl7.fhir.r4.model.Patient;
 import org.hl7.fhir.r4.model.Reference;
@@ -18,6 +19,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 import ca.uhn.fhir.context.FhirContext;
+import ca.uhn.fhir.rest.client.api.ServerValidationModeEnum;
 import ca.uhn.fhir.rest.client.api.IGenericClient;
 import ca.uhn.fhir.rest.client.interceptor.SimpleRequestHeaderInterceptor;
 import ca.uhn.fhir.rest.server.exceptions.BaseServerResponseException;
@@ -37,6 +39,7 @@ public class UpstreamForwarder {
     private final IGenericClient client;
 
     public UpstreamForwarder(FhirContext ctx, @Value("${upstream.fhir.base-url:http://18.218.25.8:8081/fhir}") String upstreamUrl) {
+        ctx.getRestfulClientFactory().setServerValidationMode(ServerValidationModeEnum.NEVER);
         this.client = ctx.newRestfulGenericClient(upstreamUrl);
         this.client.registerInterceptor(new SimpleRequestHeaderInterceptor("X-Internal-Request", "true"));
     }
@@ -93,6 +96,56 @@ public class UpstreamForwarder {
             ourLog.error("ERROR forwarding observations: {}", e.getMessage());
         } catch (Exception e) {
             ourLog.error("ERROR forwarding observations", e);
+        }
+    }
+
+    public void upsertMeasureReports(List<MeasureReport> measureReports) {
+        if (measureReports == null || measureReports.isEmpty()) return;
+        if (isUpstreamSuppressed("measure-reports")) return;
+        try {
+            Bundle tx = new Bundle().setType(Bundle.BundleType.TRANSACTION);
+            for (MeasureReport report : measureReports) {
+                MeasureReport reportCopy = report.copy();
+
+                reportCopy.getExtension().removeIf(ext -> "http://patient-location".equals(ext.getUrl()));
+                Extension locationExtension = new Extension();
+                locationExtension.setUrl("http://patient-location");
+                Extension blockExtension = new Extension();
+                blockExtension.setUrl("block");
+                blockExtension.setValue(new org.hl7.fhir.r4.model.StringType(blockValue));
+                locationExtension.addExtension(blockExtension);
+                reportCopy.addExtension(locationExtension);
+
+                Bundle.BundleEntryComponent entry = tx.addEntry().setResource(reportCopy);
+                String reportId = reportCopy.getIdElement().getIdPart();
+
+                if (reportId != null && !reportId.isBlank()) {
+                    entry.getRequest()
+                            .setMethod(Bundle.HTTPVerb.PUT)
+                            .setUrl("MeasureReport/" + reportId);
+                } else if (reportCopy.hasIdentifier()
+                        && reportCopy.getIdentifierFirstRep().hasSystem()
+                        && reportCopy.getIdentifierFirstRep().hasValue()) {
+                    entry.getRequest()
+                            .setMethod(Bundle.HTTPVerb.PUT)
+                            .setUrl("MeasureReport?identifier="
+                                    + reportCopy.getIdentifierFirstRep().getSystem()
+                                    + "|"
+                                    + reportCopy.getIdentifierFirstRep().getValue());
+                } else {
+                    entry.getRequest()
+                            .setMethod(Bundle.HTTPVerb.POST)
+                            .setUrl("MeasureReport");
+                }
+            }
+
+            client.transaction().withBundle(tx).execute();
+        } catch (BaseServerResponseException e) {
+            maybeSuppressUpstream(e, "measure-reports");
+            ourLog.error("ERROR forwarding measure reports: {}", e.getMessage());
+        } catch (Exception e) {
+            maybeSuppressOnConnectivityFailure(e, "measure-reports");
+            ourLog.warn("Skipping measure report forward: {}", e.getMessage());
         }
     }
 
@@ -413,6 +466,27 @@ public class UpstreamForwarder {
             long until = System.currentTimeMillis() + UPSTREAM_FAILURE_COOLDOWN_MS;
             upstreamSuppressUntilMs.set(until);
             ourLog.error("Upstream appears uninitialized (missing HAPI schema). Suppressing {} forwarding for {}s.",
+                    operation,
+                    UPSTREAM_FAILURE_COOLDOWN_MS / 1000);
+        }
+    }
+
+    private void maybeSuppressOnConnectivityFailure(Exception e, String operation) {
+        String msg = e.getMessage();
+        if (msg == null) {
+            return;
+        }
+
+        boolean connectivityIssue = msg.contains("HAPI-1357")
+                || msg.contains("Failed to retrieve the server metadata statement")
+                || msg.contains("Connection refused")
+                || msg.contains("connect timed out")
+                || msg.contains("Read timed out");
+
+        if (connectivityIssue) {
+            long until = System.currentTimeMillis() + UPSTREAM_FAILURE_COOLDOWN_MS;
+            upstreamSuppressUntilMs.set(until);
+            ourLog.warn("Upstream unavailable. Suppressing {} forwarding for {}s.",
                     operation,
                     UPSTREAM_FAILURE_COOLDOWN_MS / 1000);
         }
