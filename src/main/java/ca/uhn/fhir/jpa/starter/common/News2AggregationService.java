@@ -3,10 +3,14 @@ package ca.uhn.fhir.jpa.starter.common;
 import ca.uhn.fhir.context.FhirContext;
 import ca.uhn.fhir.jpa.api.dao.DaoRegistry;
 import ca.uhn.fhir.jpa.api.dao.IFhirResourceDao;
+import ca.uhn.fhir.jpa.searchparam.SearchParameterMap;
+import ca.uhn.fhir.rest.api.server.IBundleProvider;
+import ca.uhn.fhir.rest.param.TokenParam;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.PersistenceContext;
+import org.hl7.fhir.instance.model.api.IBaseResource;
 import org.hl7.fhir.r4.model.*;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
@@ -71,6 +75,10 @@ public class News2AggregationService {
 
     private IFhirResourceDao<Patient> patientDao() {
         return daoRegistry.getResourceDao(Patient.class);
+    }
+
+    private IFhirResourceDao<Observation> observationDao() {
+        return daoRegistry.getResourceDao(Observation.class);
     }
 
     // ----------------------------------------------------
@@ -316,6 +324,30 @@ public class News2AggregationService {
     private record BlockAverageSnapshot(String block, double average, int sampleCount) {
     }
 
+    private void upsertLocalBlockAverageObservation(Observation blockAverageObservation) {
+        String aggregateIdentifier = blockAverageObservation.getIdentifierFirstRep().getValue();
+        Observation existing = findExistingAggregateByIdentifier(aggregateIdentifier);
+        if (existing != null) {
+            blockAverageObservation.setId(existing.getIdElement());
+            observationDao().update(blockAverageObservation);
+            return;
+        }
+        observationDao().create(blockAverageObservation);
+    }
+
+    private Observation findExistingAggregateByIdentifier(String aggregateIdentifier) {
+        SearchParameterMap searchMap = new SearchParameterMap();
+        searchMap.add("identifier", new TokenParam(BLOCK_AVG_IDENTIFIER_SYSTEM, aggregateIdentifier));
+        searchMap.setLoadSynchronous(true);
+
+        IBundleProvider results = observationDao().search(searchMap);
+        List<IBaseResource> resources = results.getAllResources();
+        if (!resources.isEmpty() && resources.get(0) instanceof Observation) {
+            return (Observation) resources.get(0);
+        }
+        return null;
+    }
+
     private class PatientAndBlockForwardSync implements TransactionSynchronization {
         private final Patient patient;
         private final BlockAverageSnapshot blockAverage;
@@ -328,8 +360,10 @@ public class News2AggregationService {
         @Override
         public void afterCommit() {
             Timer.Sample upstreamTimer = Timer.start(meterRegistry);
+            Observation blockAverageObservation = toBlockAverageObservation(blockAverage);
+            upsertLocalBlockAverageObservation(blockAverageObservation);
             upstreamForwarder.upsertPatients(List.of(patient));
-            upstreamForwarder.createObservations(List.of(toBlockAverageObservation(blockAverage)));
+            upstreamForwarder.createObservations(List.of(blockAverageObservation));
             upstreamTimer.stop(
                     Timer.builder(METRIC_UPSTREAM)
                             .description("Time spent forwarding patients upstream")

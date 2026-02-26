@@ -268,8 +268,14 @@
 
             <div class="data-section">
                 <h2 class="section-title">🧠 Socioeconomic Cluster Profiles (K-Means)</h2>
-                <p style="color: #666; margin-bottom: 15px;">Dummy-enriched block-level clustering by NEWS2, age, income, and seasonality.</p>
+                <p style="color: #666; margin-bottom: 15px;">Block-level clustering by NEWS2, age, and risk distribution.</p>
                 <p id="clusterQuality" style="color: #444; margin-bottom: 12px; font-size: 13px;"></p>
+                <div style="margin-bottom: 12px;">
+                    <button id="toggleKmeansGraphBtn" onclick="toggleKMeansGraph()" style="padding: 8px 14px; background: #667eea; color: #fff; border: none; border-radius: 6px; cursor: pointer; font-weight: 600;">Show K-Means Graph</button>
+                </div>
+                <div id="kmeansGraphContainer" style="display:none; margin-bottom: 16px; padding: 12px; border: 1px solid #e5e7eb; border-radius: 8px; background: #fafafa;">
+                    <canvas id="kmeansClusterChart" height="120"></canvas>
+                </div>
                 <table>
                     <thead>
                         <tr>
@@ -277,7 +283,9 @@
                             <th>Patients</th>
                             <th>Avg NEWS2</th>
                             <th>Avg Age</th>
-                            <th>Avg Income</th>
+                            <th>Avg Active Conditions</th>
+                            <th>Male %</th>
+                            <th>Female %</th>
                             <th>Low Risk %</th>
                             <th>Medium Risk %</th>
                             <th>High Risk %</th>
@@ -332,21 +340,152 @@
     <script>
         let autoRefreshInterval;
         let chartInstances = {}; // Store chart instances for updates
+        let kmeansChart = null;
+        let latestClusters = [];
+        let latestClusterPoints = [];
+        let hasLoadedOnce = false;
+        let dashboardRefreshInFlight = false;
         
         function toFixedSafe(val, digits) {
             const n = Number(val);
             return Number.isFinite(n) ? n.toFixed(digits) : 'N/A';
         }
 
-        async function loadDashboard() {
+        function toggleKMeansGraph() {
+            const container = document.getElementById('kmeansGraphContainer');
+            const button = document.getElementById('toggleKmeansGraphBtn');
+            const opening = container.style.display === 'none';
+
+            container.style.display = opening ? 'block' : 'none';
+            button.textContent = opening ? 'Hide K-Means Graph' : 'Show K-Means Graph';
+
+            if (opening) {
+                renderKMeansGraph(latestClusters, latestClusterPoints);
+            }
+        }
+
+        function renderKMeansGraph(clusters, clusterPoints) {
+            const canvas = document.getElementById('kmeansClusterChart');
+            const ctx = canvas.getContext('2d');
+
+            if (kmeansChart) {
+                kmeansChart.destroy();
+                kmeansChart = null;
+            }
+
+            if ((!clusters || clusters.length === 0) && (!clusterPoints || clusterPoints.length === 0)) {
+                return;
+            }
+
+            const palette = [
+                'rgba(102, 126, 234, 0.7)',
+                'rgba(16, 185, 129, 0.7)',
+                'rgba(245, 158, 11, 0.7)',
+                'rgba(239, 68, 68, 0.7)',
+                'rgba(168, 85, 247, 0.7)',
+                'rgba(14, 165, 233, 0.7)'
+            ];
+
+            const byCluster = new Map();
+            (clusterPoints || []).forEach(p => {
+                const clusterId = Number(p.clusterId);
+                if (!Number.isFinite(clusterId)) return;
+                if (!byCluster.has(clusterId)) {
+                    byCluster.set(clusterId, []);
+                }
+                byCluster.get(clusterId).push({
+                    x: Number(p.age) || 0,
+                    y: Number(p.news2) || 0,
+                    r: 4
+                });
+            });
+
+            const datasets = [];
+
+            (clusterPoints && clusterPoints.length > 0 ? Array.from(byCluster.keys()).sort((a, b) => a - b) : (clusters || []).map(c => c.clusterId)).forEach((clusterId, idx) => {
+                const color = palette[idx % palette.length];
+                const points = byCluster.get(clusterId) || [];
+                if (points.length > 0) {
+                    datasets.push({
+                        label: `C${clusterId} points`,
+                        data: points,
+                        backgroundColor: color,
+                        borderColor: color.replace('0.7', '1'),
+                        borderWidth: 1
+                    });
+                }
+
+                const centroid = (clusters || []).find(c => Number(c.clusterId) === Number(clusterId));
+                if (centroid) {
+                    datasets.push({
+                        label: `C${clusterId} centroid`,
+                        data: [{
+                            x: Number(centroid.avgAge) || 0,
+                            y: Number(centroid.avgNews2) || 0,
+                            r: Math.max(8, Math.min(20, (Number(centroid.patientCount) || 1) * 0.8))
+                        }],
+                        backgroundColor: color.replace('0.7', '1'),
+                        borderColor: '#111827',
+                        borderWidth: 2
+                    });
+                }
+            });
+
+            kmeansChart = new Chart(ctx, {
+                type: 'bubble',
+                data: { datasets },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: true,
+                    plugins: {
+                        legend: { position: 'bottom' },
+                        tooltip: {
+                            callbacks: {
+                                label: function(context) {
+                                    const ds = context.dataset || {};
+                                    const raw = context.raw || {};
+                                    return `${ds.label}: age=${toFixedSafe(raw.x, 1)}, NEWS2=${toFixedSafe(raw.y, 2)}`;
+                                }
+                            }
+                        }
+                    },
+                    scales: {
+                        x: {
+                            title: { display: true, text: 'Average Age' },
+                            min: 0
+                        },
+                        y: {
+                            title: { display: true, text: 'Average NEWS2' },
+                            min: 0
+                        }
+                    }
+                }
+            });
+        }
+
+        async function loadDashboard(options = {}) {
+            const { showLoading = false } = options;
             const blockFilter = document.getElementById('blockFilter').value.trim();
             const loading = document.getElementById('loading');
             const error = document.getElementById('error');
             const content = document.getElementById('content');
 
-            loading.style.display = 'block';
-            error.style.display = 'none';
-            content.style.display = 'none';
+            if (dashboardRefreshInFlight) {
+                return;
+            }
+            dashboardRefreshInFlight = true;
+
+            if (showLoading && !hasLoadedOnce) {
+                loading.style.display = 'block';
+                error.style.display = 'none';
+                content.style.display = 'none';
+            } else {
+                loading.style.display = 'none';
+                error.style.display = 'none';
+                if (hasLoadedOnce) {
+                    content.style.display = 'block';
+                }
+            }
 
             try {
                 // Build URL with optional block parameter
@@ -377,12 +516,19 @@
                     console.log('Auto-detected block from location stats:', blockToLoad);
                 }
                 await loadHistoricalData(blockToLoad);
+                hasLoadedOnce = true;
                 
             } catch (err) {
                 console.error('Dashboard error:', err);
-                loading.style.display = 'none';
-                error.style.display = 'block';
-                error.textContent = `❌ Error loading dashboard: ${err.message}. Make sure the FHIR server is running on port 8085.`;
+                if (!hasLoadedOnce) {
+                    loading.style.display = 'none';
+                    error.style.display = 'block';
+                    error.textContent = `❌ Error loading dashboard: ${err.message}. Make sure the FHIR server is running on port 8071.`;
+                } else {
+                    document.getElementById('lastUpdate').textContent = `Update failed: ${new Date().toLocaleTimeString()}`;
+                }
+            } finally {
+                dashboardRefreshInFlight = false;
             }
         }
 
@@ -436,6 +582,9 @@
             const clusterQuality = document.getElementById('clusterQuality');
             clusterBody.innerHTML = '';
             const clusters = data.socioeconomicAnalysis?.clusterProfiles || [];
+            const clusterPoints = data.socioeconomicAnalysis?.clusterPoints || [];
+            latestClusters = clusters;
+            latestClusterPoints = clusterPoints;
             const q = data.socioeconomicAnalysis?.quality;
             if (q) {
                 const warn = q.lowConfidence ? ` ⚠ low confidence (min ${toFixedSafe(q.minSilhouette, 3)})` : ' ✓ acceptable';
@@ -453,7 +602,9 @@
                             <td>${c.patientCount ?? 0}</td>
                             <td>${toFixedSafe(c.avgNews2, 2)}</td>
                             <td>${toFixedSafe(c.avgAge, 1)}</td>
-                            <td>${toFixedSafe(c.avgIncome, 0)}</td>
+                            <td>${toFixedSafe(c.avgConditions, 2)}</td>
+                            <td>${toFixedSafe(c.pctMale, 1)}%</td>
+                            <td>${toFixedSafe(c.pctFemale, 1)}%</td>
                             <td class="risk-low">${toFixedSafe(c.pctLowRisk, 1)}%</td>
                             <td class="risk-medium">${toFixedSafe(c.pctMediumRisk, 1)}%</td>
                             <td class="risk-high">${toFixedSafe(c.pctHighRisk, 1)}%</td>
@@ -462,7 +613,11 @@
                     `;
                 });
             } else {
-                clusterBody.innerHTML = '<tr><td colspan="9" style="text-align:center;">No cluster analysis available</td></tr>';
+                clusterBody.innerHTML = '<tr><td colspan="11" style="text-align:center;">No cluster analysis available</td></tr>';
+            }
+
+            if (document.getElementById('kmeansGraphContainer').style.display !== 'none') {
+                renderKMeansGraph(clusters, clusterPoints);
             }
 
             // Render conditions
@@ -676,7 +831,7 @@
 
         // Load on page load
         window.addEventListener('load', () => {
-            loadDashboard();
+            loadDashboard({ showLoading: true });
             startAutoRefresh();
         });
     </script>

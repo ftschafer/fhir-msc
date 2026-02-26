@@ -118,12 +118,21 @@ hapi:
         # false = read from Patient extension URL below, fallback to dummy if missing
         use-dummy-income: false
         income-extension-url: "http://average-income"
+        income-fixed-by-block: true
+        fixed-block-income: 3200
         kmeans:
           max-k: 4
           runs: 8
           min-silhouette: 0.2
           min-cluster-size: 2
           max-singleton-ratio: 0.2
+          weight-news2: 1.4
+          weight-age: 0.9
+          weight-active-conditions: 1.2
+          weight-risk-band: 1.3
+          weight-elderly-flag: 0.8
+          weight-male-flag: 0.35
+          weight-female-flag: 0.35
 
     measure-report:
       block-health:
@@ -139,8 +148,6 @@ hapi:
         avg-income-unit: "BRL/month"
         care-units: 4
         care-units-unit: "units"
-        mean-age: 42.5
-        mean-age-unit: "years"
         seasonality: "summer"
     
     ### This flag when enabled to true, will avail evaluate measure operations from CR Module.

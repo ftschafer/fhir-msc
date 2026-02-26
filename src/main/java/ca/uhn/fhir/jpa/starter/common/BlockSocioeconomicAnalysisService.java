@@ -1,18 +1,27 @@
 package ca.uhn.fhir.jpa.starter.common;
 
+import ca.uhn.fhir.jpa.api.dao.DaoRegistry;
+import ca.uhn.fhir.jpa.api.dao.IFhirResourceDao;
+import ca.uhn.fhir.jpa.searchparam.SearchParameterMap;
+import ca.uhn.fhir.rest.api.server.IBundleProvider;
+import ca.uhn.fhir.rest.param.TokenParam;
+import org.hl7.fhir.instance.model.api.IBaseResource;
+import org.hl7.fhir.r4.model.Condition;
 import org.hl7.fhir.r4.model.DateType;
 import org.hl7.fhir.r4.model.Extension;
 import org.hl7.fhir.r4.model.IntegerType;
-import org.hl7.fhir.r4.model.DecimalType;
 import org.hl7.fhir.r4.model.Patient;
 import org.hl7.fhir.r4.model.StringType;
+import org.hl7.fhir.r4.model.Enumerations;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDate;
 import java.time.ZoneId;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Random;
 
@@ -22,12 +31,7 @@ public class BlockSocioeconomicAnalysisService {
     private static final String NEWS2_EXTENSION_URL = "http://news2-score";
     private static final String LOCATION_EXTENSION_URL = "http://patient-location";
     private static final String BLOCK_URL = "block";
-
-    @Value("${hapi.fhir.analysis.socioeconomic.use-dummy-income:true}")
-    private boolean useDummyIncome;
-
-    @Value("${hapi.fhir.analysis.socioeconomic.income-extension-url:http://average-income}")
-    private String incomeExtensionUrl;
+    private final DaoRegistry daoRegistry;
 
     @Value("${hapi.fhir.analysis.socioeconomic.kmeans.max-k:6}")
     private int configuredMaxK;
@@ -44,6 +48,31 @@ public class BlockSocioeconomicAnalysisService {
     @Value("${hapi.fhir.analysis.socioeconomic.kmeans.max-singleton-ratio:0.20}")
     private double maxSingletonRatio;
 
+    @Value("${hapi.fhir.analysis.socioeconomic.kmeans.weight-news2:1.4}")
+    private double weightNews2;
+
+    @Value("${hapi.fhir.analysis.socioeconomic.kmeans.weight-age:0.9}")
+    private double weightAge;
+
+    @Value("${hapi.fhir.analysis.socioeconomic.kmeans.weight-active-conditions:1.2}")
+    private double weightActiveConditions;
+
+    @Value("${hapi.fhir.analysis.socioeconomic.kmeans.weight-risk-band:1.3}")
+    private double weightRiskBand;
+
+    @Value("${hapi.fhir.analysis.socioeconomic.kmeans.weight-elderly-flag:0.8}")
+    private double weightElderlyFlag;
+
+    @Value("${hapi.fhir.analysis.socioeconomic.kmeans.weight-male-flag:0.35}")
+    private double weightMaleFlag;
+
+    @Value("${hapi.fhir.analysis.socioeconomic.kmeans.weight-female-flag:0.35}")
+    private double weightFemaleFlag;
+
+    public BlockSocioeconomicAnalysisService(DaoRegistry daoRegistry) {
+        this.daoRegistry = daoRegistry;
+    }
+
     public AnalysisOutput analyze(List<Patient> patients, String filterBlock, String defaultBlock) {
         if (patients == null || patients.isEmpty()) {
             return AnalysisOutput.empty();
@@ -51,6 +80,7 @@ public class BlockSocioeconomicAnalysisService {
 
         List<FeatureRow> rows = new ArrayList<>();
         LocalDate now = LocalDate.now();
+        Map<String, Integer> activeConditionsByPatient = loadActiveConditionCountsByPatientId();
 
         for (Patient patient : patients) {
             String patientId = patient.getIdElement().getIdPart();
@@ -72,10 +102,13 @@ public class BlockSocioeconomicAnalysisService {
 
             int news2 = extractNews2(patient);
             int age = extractAge(patient, now, patientId);
-            double income = resolveIncome(patient, patientId, block);
-            double seasonality = estimateSeasonality(now);
+            int activeConditions = activeConditionsByPatient.getOrDefault(patientId, 0);
+            int riskBand = classifyRiskBand(news2);
+            int elderlyFlag = age >= 65 ? 1 : 0;
+            int maleFlag = extractMaleFlag(patient);
+            int femaleFlag = extractFemaleFlag(patient);
 
-            rows.add(new FeatureRow(patientId, block, news2, age, income, seasonality));
+            rows.add(new FeatureRow(patientId, block, news2, age, activeConditions, riskBand, elderlyFlag, maleFlag, femaleFlag));
         }
 
         if (rows.isEmpty()) {
@@ -85,6 +118,7 @@ public class BlockSocioeconomicAnalysisService {
         List<double[]> normalized = normalize(rows);
         KMeansSelectionResult selected = selectBestModel(normalized);
         List<ClusterProfile> profiles = toProfiles(rows, selected.assignment, selected.k);
+        List<ClusterPoint> points = toClusterPoints(rows, selected.assignment, selected.k);
 
         AnalysisQuality quality = new AnalysisQuality(
                 selected.k,
@@ -98,7 +132,7 @@ public class BlockSocioeconomicAnalysisService {
                 round(selected.adjustedSilhouette)
         );
 
-        return new AnalysisOutput(rows.size(), selected.k, profiles, quality);
+        return new AnalysisOutput(rows.size(), selected.k, profiles, points, quality);
     }
 
     private KMeansSelectionResult selectBestModel(List<double[]> normalized) {
@@ -359,16 +393,27 @@ public class BlockSocioeconomicAnalysisService {
         double maxNews2 = rows.stream().mapToDouble(FeatureRow::news2).max().orElse(1);
         double minAge = rows.stream().mapToDouble(FeatureRow::age).min().orElse(0);
         double maxAge = rows.stream().mapToDouble(FeatureRow::age).max().orElse(1);
-        double minIncome = rows.stream().mapToDouble(FeatureRow::income).min().orElse(0);
-        double maxIncome = rows.stream().mapToDouble(FeatureRow::income).max().orElse(1);
+        double minConditions = rows.stream().mapToDouble(FeatureRow::activeConditions).min().orElse(0);
+        double maxConditions = rows.stream().mapToDouble(FeatureRow::activeConditions).max().orElse(1);
+        double minRiskBand = rows.stream().mapToDouble(FeatureRow::riskBand).min().orElse(0);
+        double maxRiskBand = rows.stream().mapToDouble(FeatureRow::riskBand).max().orElse(1);
+        double minElderlyFlag = rows.stream().mapToDouble(FeatureRow::elderlyFlag).min().orElse(0);
+        double maxElderlyFlag = rows.stream().mapToDouble(FeatureRow::elderlyFlag).max().orElse(1);
+        double minMaleFlag = rows.stream().mapToDouble(FeatureRow::maleFlag).min().orElse(0);
+        double maxMaleFlag = rows.stream().mapToDouble(FeatureRow::maleFlag).max().orElse(1);
+        double minFemaleFlag = rows.stream().mapToDouble(FeatureRow::femaleFlag).min().orElse(0);
+        double maxFemaleFlag = rows.stream().mapToDouble(FeatureRow::femaleFlag).max().orElse(1);
 
         List<double[]> out = new ArrayList<>();
         for (FeatureRow row : rows) {
             out.add(new double[]{
-                    scale(row.news2, minNews2, maxNews2),
-                    scale(row.age, minAge, maxAge),
-                    scale(row.income, minIncome, maxIncome),
-                    row.seasonality
+                    scale(row.news2, minNews2, maxNews2) * weightNews2,
+                    scale(row.age, minAge, maxAge) * weightAge,
+                    scale(row.activeConditions, minConditions, maxConditions) * weightActiveConditions,
+                    scale(row.riskBand, minRiskBand, maxRiskBand) * weightRiskBand,
+                    scale(row.elderlyFlag, minElderlyFlag, maxElderlyFlag) * weightElderlyFlag,
+                    scale(row.maleFlag, minMaleFlag, maxMaleFlag) * weightMaleFlag,
+                    scale(row.femaleFlag, minFemaleFlag, maxFemaleFlag) * weightFemaleFlag
             });
         }
         return out;
@@ -417,56 +462,89 @@ public class BlockSocioeconomicAnalysisService {
         return 18 + (hash % 73);
     }
 
-    private double estimateIncome(String patientId, String block) {
-        int hash = Math.abs(Objects.hash(patientId, block));
-        return 1200 + (hash % 6801);
-    }
+    private Map<String, Integer> loadActiveConditionCountsByPatientId() {
+        Map<String, Integer> counts = new HashMap<>();
+        IFhirResourceDao<Condition> conditionDao = daoRegistry.getResourceDao(Condition.class);
 
-    private double resolveIncome(Patient patient, String patientId, String block) {
-        if (!useDummyIncome) {
-            Double fromExtension = extractIncomeFromExtension(patient);
-            if (fromExtension != null) {
-                return fromExtension;
+        SearchParameterMap search = new SearchParameterMap();
+        search.add("clinical-status", new TokenParam("http://terminology.hl7.org/CodeSystem/condition-clinical", "active"));
+        search.setLoadSynchronous(true);
+
+        IBundleProvider results = conditionDao.search(search);
+        for (IBaseResource resource : results.getAllResources()) {
+            if (!(resource instanceof Condition condition) || condition.getSubject() == null) {
+                continue;
             }
+
+            String patientId = extractPatientIdFromReference(condition.getSubject().getReference());
+            if (patientId == null || patientId.isBlank()) {
+                continue;
+            }
+
+            counts.merge(patientId, 1, Integer::sum);
         }
-        return estimateIncome(patientId, block);
+
+        return counts;
     }
 
-    private Double extractIncomeFromExtension(Patient patient) {
-        if (incomeExtensionUrl == null || incomeExtensionUrl.isBlank()) {
+    private String extractPatientIdFromReference(String reference) {
+        if (reference == null || reference.isBlank()) {
             return null;
         }
 
-        Extension incomeExt = patient.getExtensionByUrl(incomeExtensionUrl);
-        if (incomeExt == null || incomeExt.getValue() == null) {
-            return null;
+        String trimmed = reference.trim();
+        if (trimmed.startsWith("Patient/")) {
+            return trimmed.substring("Patient/".length());
         }
 
-        if (incomeExt.getValue() instanceof DecimalType decimalType && decimalType.getValue() != null) {
-            return decimalType.getValue().doubleValue();
+        int slash = trimmed.lastIndexOf('/');
+        if (slash >= 0 && slash < trimmed.length() - 1) {
+            return trimmed.substring(slash + 1);
         }
 
-        if (incomeExt.getValue() instanceof IntegerType integerType && integerType.getValue() != null) {
-            return integerType.getValue().doubleValue();
-        }
-
-        if (incomeExt.getValue() instanceof StringType stringType && stringType.getValue() != null) {
-            try {
-                return Double.parseDouble(stringType.getValue());
-            } catch (NumberFormatException ignored) {
-                return null;
-            }
-        }
-
-        return null;
+        return trimmed;
     }
 
-    private double estimateSeasonality(LocalDate now) {
-        int month = now.getMonthValue();
-        return Math.sin((2.0 * Math.PI * month) / 12.0);
+    private int classifyRiskBand(int news2) {
+        if (news2 >= 7) {
+            return 2;
+        }
+        if (news2 >= 5) {
+            return 1;
+        }
+        return 0;
     }
 
-    private record FeatureRow(String patientId, String block, int news2, int age, double income, double seasonality) {
+    private int extractMaleFlag(Patient patient) {
+        return patient != null && patient.getGender() == Enumerations.AdministrativeGender.MALE ? 1 : 0;
+    }
+
+    private int extractFemaleFlag(Patient patient) {
+        return patient != null && patient.getGender() == Enumerations.AdministrativeGender.FEMALE ? 1 : 0;
+    }
+
+    private record FeatureRow(
+            String patientId,
+            String block,
+            int news2,
+            int age,
+            int activeConditions,
+            int riskBand,
+            int elderlyFlag,
+            int maleFlag,
+            int femaleFlag
+    ) {
+        private FeatureRow(
+            String patientId,
+            String block,
+            int news2,
+            int age,
+            int activeConditions,
+            int riskBand,
+            int elderlyFlag
+        ) {
+            this(patientId, block, news2, age, activeConditions, riskBand, elderlyFlag, 0, 0);
+        }
     }
 
     private List<ClusterProfile> toProfiles(List<FeatureRow> rows, int[] assignment, int k) {
@@ -497,9 +575,15 @@ public class BlockSocioeconomicAnalysisService {
         return Math.round(value * 1000.0) / 1000.0;
     }
 
-    public record AnalysisOutput(int sampleSize, int clusterCount, List<ClusterProfile> clusterProfiles, AnalysisQuality quality) {
+        public record AnalysisOutput(
+            int sampleSize,
+            int clusterCount,
+            List<ClusterProfile> clusterProfiles,
+            List<ClusterPoint> clusterPoints,
+            AnalysisQuality quality
+        ) {
         public static AnalysisOutput empty() {
-            return new AnalysisOutput(0, 0, List.of(), new AnalysisQuality(0, 0.0, 0, 0.0, 0.2, true, 0, 0, 0.0));
+            return new AnalysisOutput(0, 0, List.of(), List.of(), new AnalysisQuality(0, 0.0, 0, 0.0, 0.2, true, 0, 0, 0.0));
         }
     }
 
@@ -521,7 +605,9 @@ public class BlockSocioeconomicAnalysisService {
             int patientCount,
             double avgNews2,
             double avgAge,
-            double avgIncome,
+            double avgConditions,
+            double pctMale,
+            double pctFemale,
             double pctLowRisk,
             double pctMediumRisk,
             double pctHighRisk,
@@ -529,12 +615,51 @@ public class BlockSocioeconomicAnalysisService {
     ) {
     }
 
+    public record ClusterPoint(
+            String patientId,
+            int clusterId,
+            int news2,
+            int age,
+            int activeConditions,
+            int riskBand,
+            int elderlyFlag,
+            int maleFlag,
+            int femaleFlag
+    ) {
+    }
+
+    private List<ClusterPoint> toClusterPoints(List<FeatureRow> rows, int[] assignment, int k) {
+        List<ClusterPoint> points = new ArrayList<>();
+        int size = Math.min(rows.size(), assignment.length);
+        for (int i = 0; i < size; i++) {
+            int clusterId = assignment[i];
+            if (clusterId < 0 || clusterId >= k) {
+                continue;
+            }
+            FeatureRow row = rows.get(i);
+            points.add(new ClusterPoint(
+                    row.patientId,
+                    clusterId,
+                    row.news2,
+                    row.age,
+                    row.activeConditions,
+                    row.riskBand,
+                    row.elderlyFlag,
+                    row.maleFlag,
+                    row.femaleFlag
+            ));
+        }
+        return points;
+    }
+
     private static class ClusterAccumulator {
         private final int clusterId;
         private int size;
         private double news2Sum;
         private double ageSum;
-        private double incomeSum;
+        private double activeConditionsSum;
+        private int maleCount;
+        private int femaleCount;
         private int lowRisk;
         private int mediumRisk;
         private int highRisk;
@@ -547,7 +672,9 @@ public class BlockSocioeconomicAnalysisService {
             size++;
             news2Sum += row.news2;
             ageSum += row.age;
-            incomeSum += row.income;
+            activeConditionsSum += row.activeConditions;
+            maleCount += row.maleFlag;
+            femaleCount += row.femaleFlag;
 
             if (row.news2 >= 7) {
                 highRisk++;
@@ -561,17 +688,30 @@ public class BlockSocioeconomicAnalysisService {
         private ClusterProfile toProfile() {
             double avgNews2 = news2Sum / size;
             double avgAge = ageSum / size;
-            double avgIncome = incomeSum / size;
+            double avgConditions = activeConditionsSum / size;
+            double pctMale = (maleCount * 100.0) / size;
+            double pctFemale = (femaleCount * 100.0) / size;
+            double pctLow = (lowRisk * 100.0) / size;
+            double pctMedium = (mediumRisk * 100.0) / size;
+            double pctHigh = (highRisk * 100.0) / size;
 
             String label;
-            if (avgNews2 >= 7) {
+            if (pctHigh >= 40.0 || avgNews2 >= 7.0) {
                 label = "High-risk clinical cluster";
-            } else if (avgAge >= 60 && avgIncome < 3200) {
-                label = "Older lower-income vulnerability cluster";
-            } else if (avgIncome >= 5000 && avgNews2 < 4) {
-                label = "Lower-risk higher-income cluster";
+            } else if (pctMedium >= 40.0 || avgNews2 >= 5.0) {
+                label = avgAge >= 65.0
+                        ? "Older-population medium-risk cluster"
+                        : "Medium-risk clinical cluster";
+            } else if (avgAge >= 65.0) {
+                label = "Older-population lower-risk cluster";
             } else {
-                label = "Mixed-risk general population cluster";
+                label = "Lower-risk clinical cluster";
+            }
+
+            if (pctMale >= 65.0) {
+                label += " (male-majority)";
+            } else if (pctFemale >= 65.0) {
+                label += " (female-majority)";
             }
 
             return new ClusterProfile(
@@ -579,10 +719,12 @@ public class BlockSocioeconomicAnalysisService {
                     size,
                     round(avgNews2),
                     round(avgAge),
-                    round(avgIncome),
-                    round((lowRisk * 100.0) / size),
-                    round((mediumRisk * 100.0) / size),
-                    round((highRisk * 100.0) / size),
+                    round(avgConditions),
+                    round(pctMale),
+                    round(pctFemale),
+                    round(pctLow),
+                    round(pctMedium),
+                    round(pctHigh),
                     label
             );
         }

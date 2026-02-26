@@ -3,7 +3,14 @@ package ca.uhn.fhir.jpa.starter.common;
 import ca.uhn.fhir.context.FhirContext;
 import ca.uhn.fhir.jpa.api.dao.DaoRegistry;
 import ca.uhn.fhir.jpa.api.dao.IFhirResourceDao;
+import ca.uhn.fhir.jpa.searchparam.SearchParameterMap;
+import ca.uhn.fhir.rest.api.server.IBundleProvider;
+import org.hl7.fhir.instance.model.api.IBaseResource;
+import org.hl7.fhir.r4.model.Extension;
+import org.hl7.fhir.r4.model.Enumerations;
+import org.hl7.fhir.r4.model.Patient;
 import org.hl7.fhir.r4.model.MeasureReport;
+import org.hl7.fhir.r4.model.StringType;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -12,8 +19,13 @@ import org.springframework.context.event.EventListener;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
+import java.time.LocalDate;
+import java.time.Period;
+import java.time.ZoneId;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Set;
 
 @Service
 public class BlockMeasureReportPublisherService {
@@ -23,6 +35,7 @@ public class BlockMeasureReportPublisherService {
     private final UpstreamForwarder upstreamForwarder;
     private final FhirContext fhirContext;
     private final DaoRegistry daoRegistry;
+    private int lastPublishedTotalPatients = -1;
 
     @Value("${hapi.fhir.location.block:North}")
     private String blockValue;
@@ -51,21 +64,6 @@ public class BlockMeasureReportPublisherService {
     @Value("${hapi.fhir.measure-report.block-health.group-text:Block Summary}")
     private String groupText;
 
-    @Value("${hapi.fhir.measure-report.block-health.total-conditions-label:Total Number of Conditions}")
-    private String totalConditionsLabel;
-
-    @Value("${hapi.fhir.measure-report.block-health.total-conditions:340}")
-    private int totalConditions;
-
-    @Value("${hapi.fhir.measure-report.block-health.mean-news2:3.7}")
-    private double meanNews2;
-
-    @Value("${hapi.fhir.measure-report.block-health.mean-news2-unit:Mean NEWS2}")
-    private String meanNews2Unit;
-
-    @Value("${hapi.fhir.measure-report.block-health.mean-news2-code:{score}}")
-    private String meanNews2Code;
-
     @Value("${hapi.fhir.measure-report.block-health.avg-income:3200}")
     private double averageIncome;
 
@@ -78,14 +76,14 @@ public class BlockMeasureReportPublisherService {
     @Value("${hapi.fhir.measure-report.block-health.care-units-unit:units}")
     private String careUnitsUnit;
 
-    @Value("${hapi.fhir.measure-report.block-health.mean-age:42.5}")
-    private double meanAge;
-
     @Value("${hapi.fhir.measure-report.block-health.mean-age-unit:years}")
     private String meanAgeUnit;
 
     @Value("${hapi.fhir.measure-report.block-health.seasonality:summer}")
     private String seasonality;
+
+    private static final String LOCATION_EXTENSION_URL = "http://patient-location";
+    private static final String BLOCK_URL = "block";
 
     public BlockMeasureReportPublisherService(
         UpstreamForwarder upstreamForwarder,
@@ -99,31 +97,70 @@ public class BlockMeasureReportPublisherService {
 
     @EventListener(ApplicationReadyEvent.class)
     public void publishAtStartup() {
-        forwardHardcodedMeasureReport("startup");
+      publishIfEligible("startup");
     }
 
-    @Scheduled(fixedDelay = 300000, initialDelay = 300000)
+    @Scheduled(fixedDelay = 5, initialDelay = 5)
     public void publishEveryFiveMinutes() {
-        forwardHardcodedMeasureReport("scheduled-5min");
+      publishIfEligible("scheduled-5min");
     }
 
-    private void forwardHardcodedMeasureReport(String trigger) {
+    private synchronized void publishIfEligible(String trigger) {
+      AgeStats ageStats = calculateAgeStatsForBlock(blockValue);
+
+      if (lastPublishedTotalPatients < 0) {
+        if (ageStats.validBirthDateCount() == 0) {
+          logger.info("Skipping initial MeasureReport publish: waiting for first valid age calculation.");
+          return;
+        }
+        publishMeasureReport(trigger, ageStats);
+        lastPublishedTotalPatients = ageStats.totalPatients();
+        return;
+      }
+
+      if (ageStats.totalPatients() <= lastPublishedTotalPatients) {
+        logger.debug("Skipping MeasureReport publish: no new patients since last publish.");
+        return;
+      }
+
+      if (ageStats.validBirthDateCount() == 0) {
+        logger.info("Skipping MeasureReport publish: new patients detected but no valid birthDate available.");
+        return;
+      }
+
+      publishMeasureReport(trigger, ageStats);
+      lastPublishedTotalPatients = ageStats.totalPatients();
+    }
+
+    private void publishMeasureReport(String trigger, AgeStats ageStats) {
         try {
             MeasureReport measureReport = fhirContext
                     .newJsonParser()
-              .parseResource(MeasureReport.class, configuredMeasureReportJson(blockValue));
+          .parseResource(MeasureReport.class, configuredMeasureReportJson(
+                  blockValue,
+            ageStats.meanAge(),
+            ageStats.maleCount(),
+            ageStats.femaleCount()
+          ));
 
         upsertLocalMeasureReport(measureReport);
 
             upstreamForwarder.upsertMeasureReports(List.of(measureReport));
-        logger.info("Saved locally and forwarded hardcoded block MeasureReport. trigger={}, block={}", trigger, blockValue);
+        logger.info("Saved locally and forwarded block MeasureReport. trigger={}, block={}, meanAge={}",
+            trigger,
+            blockValue,
+            String.format(Locale.US, "%.2f", ageStats.meanAge()));
         } catch (Exception e) {
-        logger.warn("Failed to build/save/forward hardcoded block MeasureReport: {}", e.getMessage());
+        logger.warn("Failed to build/save/forward block MeasureReport: {}", e.getMessage());
         }
     }
 
     private IFhirResourceDao<MeasureReport> measureReportDao() {
       return daoRegistry.getResourceDao(MeasureReport.class);
+    }
+
+    private IFhirResourceDao<Patient> patientDao() {
+      return daoRegistry.getResourceDao(Patient.class);
     }
 
     private void upsertLocalMeasureReport(MeasureReport measureReport) {
@@ -136,7 +173,12 @@ public class BlockMeasureReportPublisherService {
       }
     }
 
-    private String configuredMeasureReportJson(String block) {
+    private String configuredMeasureReportJson(
+        String block,
+      double resolvedMeanAge,
+      int maleCount,
+      int femaleCount
+    ) {
         String safeBlock = block == null || block.isBlank() ? "North" : block.trim();
         String sanitizedBlock = safeBlock.toLowerCase().replaceAll("[^a-z0-9-]", "-");
         String reportId = reportIdPrefix + "-" + sanitizedBlock;
@@ -174,18 +216,6 @@ public class BlockMeasureReportPublisherService {
                     {
                       "code": {
                         "text": "%s"
-                      },
-                      "population": [
-                        {
-                          "code": { "text": "%s" },
-                          "count": %d
-                        }
-                      ],
-                      "measureScore": {
-                        "value": %.2f,
-                        "unit": "%s",
-                        "system": "http://unitsofmeasure.org",
-                        "code": "%s"
                       },
                       "stratifier": [
                         {
@@ -225,6 +255,30 @@ public class BlockMeasureReportPublisherService {
                           ]
                         },
                         {
+                          "code": [{ "text": "Male Patients" }],
+                          "stratum": [
+                            {
+                              "value": { "text": "Male" },
+                              "measureScore": {
+                                "value": %d,
+                                "unit": "patients"
+                              }
+                            }
+                          ]
+                        },
+                        {
+                          "code": [{ "text": "Female Patients" }],
+                          "stratum": [
+                            {
+                              "value": { "text": "Female" },
+                              "measureScore": {
+                                "value": %d,
+                                "unit": "patients"
+                              }
+                            }
+                          ]
+                        },
+                        {
                           "code": [{ "text": "Seasonality" }],
                           "stratum": [
                             {
@@ -247,18 +301,115 @@ public class BlockMeasureReportPublisherService {
                 periodStart,
                 periodEnd,
                 groupText,
-                totalConditionsLabel,
-                totalConditions,
-                meanNews2,
-                meanNews2Unit,
-                meanNews2Code,
                 averageIncome,
                 averageIncomeUnit,
                 careUnits,
                 careUnitsUnit,
-                meanAge,
+                resolvedMeanAge,
                 meanAgeUnit,
+                maleCount,
+                femaleCount,
                 seasonality
               );
+    }
+
+    private AgeStats calculateAgeStatsForBlock(String block) {
+      try {
+        SearchParameterMap searchMap = new SearchParameterMap();
+        searchMap.setLoadSynchronous(true);
+
+        IBundleProvider results = patientDao().search(searchMap);
+        List<IBaseResource> resources = results.getAllResources();
+        int totalPatients = 0;
+        int maleCount = 0;
+        int femaleCount = 0;
+
+        LocalDate today = LocalDate.now();
+        int count = 0;
+        int totalAgeYears = 0;
+        Set<String> patientIdsInBlock = new HashSet<>();
+
+        for (IBaseResource resource : resources) {
+          if (!(resource instanceof Patient patient) || !patient.hasBirthDate()) {
+            if (resource instanceof Patient patientWithoutBirthDate
+                    && isPatientInBlock(patientWithoutBirthDate, block)
+                    && patientWithoutBirthDate.getIdElement() != null
+                    && patientWithoutBirthDate.getIdElement().hasIdPart()) {
+              totalPatients++;
+              if (patientWithoutBirthDate.getGender() == Enumerations.AdministrativeGender.MALE) {
+                maleCount++;
+              } else if (patientWithoutBirthDate.getGender() == Enumerations.AdministrativeGender.FEMALE) {
+                femaleCount++;
+              }
+              patientIdsInBlock.add(patientWithoutBirthDate.getIdElement().getIdPart());
+            }
+            continue;
+          }
+
+          if (!isPatientInBlock(patient, block)) {
+            continue;
+          }
+
+          if (patient.getIdElement() != null && patient.getIdElement().hasIdPart()) {
+            patientIdsInBlock.add(patient.getIdElement().getIdPart());
+          }
+
+          totalPatients++;
+          if (patient.getGender() == Enumerations.AdministrativeGender.MALE) {
+            maleCount++;
+          } else if (patient.getGender() == Enumerations.AdministrativeGender.FEMALE) {
+            femaleCount++;
+          }
+
+          LocalDate birthDate = patient.getBirthDate().toInstant()
+              .atZone(ZoneId.systemDefault())
+              .toLocalDate();
+
+          int years = Period.between(birthDate, today).getYears();
+          if (years >= 0 && years <= 130) {
+            totalAgeYears += years;
+            count++;
+          }
+        }
+
+        if (count == 0) {
+          return new AgeStats(totalPatients, 0, 0.0, patientIdsInBlock, maleCount, femaleCount);
+        }
+
+        return new AgeStats(totalPatients, count, (double) totalAgeYears / (double) count, patientIdsInBlock, maleCount, femaleCount);
+      } catch (Exception e) {
+        logger.warn("Mean age calculation failed: {}", e.getMessage());
+        return new AgeStats(0, 0, 0.0, new HashSet<>(), 0, 0);
+      }
+    }
+
+    private boolean isPatientInBlock(Patient patient, String block) {
+      if (block == null || block.isBlank()) {
+        return true;
+      }
+
+      Extension locationExt = patient.getExtensionByUrl(LOCATION_EXTENSION_URL);
+      if (locationExt == null) {
+        return false;
+      }
+
+      for (Extension nested : locationExt.getExtension()) {
+        if (BLOCK_URL.equals(nested.getUrl()) && nested.getValue() instanceof StringType st) {
+          String patientBlock = st.getValue();
+          return patientBlock != null && patientBlock.equalsIgnoreCase(block);
+        }
+      }
+
+      return false;
+    }
+
+    private record AgeStats(
+      int totalPatients,
+      int validBirthDateCount,
+      double meanAge,
+      Set<String> patientIdsInBlock,
+      int maleCount,
+      int femaleCount
+    ) {
     }
 }

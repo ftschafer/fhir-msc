@@ -404,11 +404,30 @@ public class DashboardProvider implements IResourceProvider {
             json.append("\"patientCount\":").append(profile.patientCount()).append(",");
             json.append("\"avgNews2\":").append(String.format(Locale.US, "%.2f", profile.avgNews2())).append(",");
             json.append("\"avgAge\":").append(String.format(Locale.US, "%.2f", profile.avgAge())).append(",");
-            json.append("\"avgIncome\":").append(String.format(Locale.US, "%.2f", profile.avgIncome())).append(",");
+            json.append("\"avgConditions\":").append(String.format(Locale.US, "%.2f", profile.avgConditions())).append(",");
+            json.append("\"pctMale\":").append(String.format(Locale.US, "%.2f", profile.pctMale())).append(",");
+            json.append("\"pctFemale\":").append(String.format(Locale.US, "%.2f", profile.pctFemale())).append(",");
             json.append("\"pctLowRisk\":").append(String.format(Locale.US, "%.2f", profile.pctLowRisk())).append(",");
             json.append("\"pctMediumRisk\":").append(String.format(Locale.US, "%.2f", profile.pctMediumRisk())).append(",");
             json.append("\"pctHighRisk\":").append(String.format(Locale.US, "%.2f", profile.pctHighRisk())).append(",");
             json.append("\"profileLabel\":\"").append(escapeJson(profile.profileLabel())).append("\"");
+            json.append("}");
+        }
+        json.append("],");
+        json.append("\"clusterPoints\":[");
+        for (int i = 0; i < stats.socioeconomicAnalysis.clusterPoints().size(); i++) {
+            BlockSocioeconomicAnalysisService.ClusterPoint point = stats.socioeconomicAnalysis.clusterPoints().get(i);
+            if (i > 0) json.append(",");
+            json.append("{");
+            json.append("\"patientId\":\"").append(escapeJson(point.patientId())).append("\",");
+            json.append("\"clusterId\":").append(point.clusterId()).append(",");
+            json.append("\"news2\":").append(point.news2()).append(",");
+            json.append("\"age\":").append(point.age()).append(",");
+            json.append("\"activeConditions\":").append(point.activeConditions()).append(",");
+            json.append("\"riskBand\":").append(point.riskBand()).append(",");
+            json.append("\"elderlyFlag\":").append(point.elderlyFlag()).append(",");
+            json.append("\"maleFlag\":").append(point.maleFlag()).append(",");
+            json.append("\"femaleFlag\":").append(point.femaleFlag());
             json.append("}");
         }
         json.append("]}");
