@@ -6,4 +6,8 @@
 		<appender-ref ref="CONSOLE" />
 	</root>
 	<logger name = "org.opencds.cqf.cql.engine.debug" level="DEBUG"/>
+	<logger name="ca.uhn.fhir.jpa.starter.common.BlockMeasureReportPublisherService" level="WARN"/>
+	<logger name="ca.uhn.fhir.jpa.starter.cdss.ScheduledVitalSignAggregationService" level="WARN"/>
+	<logger name="ca.uhn.fhir.jpa.starter.cdss.VitalSignHistoryService" level="WARN"/>
+	<logger name="ca.uhn.fhir.jpa.starter.common.VitalSignAggregationService" level="WARN"/>
 </configuration>

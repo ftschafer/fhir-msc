@@ -243,11 +243,27 @@
                             <th>Block</th>
                             <th>Patient Count</th>
                             <th>Avg NEWS2</th>
+                            <th>Mean</th>
+                            <th>Median</th>
+                            <th>Variance</th>
+                            <th>Std Dev</th>
+                            <th>Incidence</th>
+                            <th>Prevalence</th>
+                            <th>Bootstrap 95% CI</th>
                         </tr>
                     </thead>
                     <tbody id="locationStatsBody">
                     </tbody>
                 </table>
+                <p id="blockStatsExplanation" style="color: #555; margin-bottom: 12px;">Visual summary of mean/median NEWS2 and incidence/prevalence by block.</p>
+                <div style="margin-bottom: 12px;">
+                    <button id="toggleBlockStatsBtn" onclick="toggleBlockStatsChart()" style="padding: 8px 14px; background: #667eea; color: #fff; border: none; border-radius: 6px; cursor: pointer; font-weight: 600;">Show Statistics Chart</button>
+                </div>
+                <div id="blockStatsChartContainer" style="display:none; margin-bottom: 16px; padding: 12px; border: 1px solid #e5e7eb; border-radius: 8px; background: #fafafa;">
+                    <div style="position: relative; height: 320px;">
+                        <canvas id="blockStatsChart"></canvas>
+                    </div>
+                </div>
             </div>
 
             <div class="data-section">
@@ -323,13 +339,14 @@
                     <tbody id="vitalSignsBody">
                     </tbody>
                 </table>
-            </div>
-
-            <div class="data-section">
-                <h2 class="section-title">📈 30-Day Vital Sign History</h2>
                 <p style="color: #666; margin-bottom: 15px;">Real-time trends showing all calculated averages (updates every aggregation cycle)</p>
-                <div class="chart-grid" id="chartsContainer">
-                    <!-- Charts will be inserted here -->
+                <div style="margin-bottom: 12px;">
+                    <button id="toggleVitalChartsBtn" onclick="toggleVitalCharts()" style="padding: 8px 14px; background: #667eea; color: #fff; border: none; border-radius: 6px; cursor: pointer; font-weight: 600;">Show Vital Charts</button>
+                </div>
+                <div id="vitalChartsContainer" style="display:none; margin-bottom: 16px; padding: 12px; border: 1px solid #e5e7eb; border-radius: 8px; background: #fafafa;">
+                    <div class="chart-grid" id="chartsContainer">
+                        <!-- Charts will be inserted here -->
+                    </div>
                 </div>
             </div>
         </div>
@@ -339,8 +356,10 @@
         let autoRefreshInterval;
         let chartInstances = {}; // Store chart instances for updates
         let kmeansChart = null;
+        let blockStatsChart = null;
         let latestClusters = [];
         let latestClusterPoints = [];
+        let latestLocationStats = [];
         let hasLoadedOnce = false;
         let dashboardRefreshInFlight = false;
         
@@ -360,6 +379,28 @@
             if (opening) {
                 renderKMeansGraph(latestClusters, latestClusterPoints);
             }
+        }
+
+        function toggleBlockStatsChart() {
+            const container = document.getElementById('blockStatsChartContainer');
+            const button = document.getElementById('toggleBlockStatsBtn');
+            const opening = container.style.display === 'none';
+
+            container.style.display = opening ? 'block' : 'none';
+            button.textContent = opening ? 'Hide Statistics Chart' : 'Show Statistics Chart';
+
+            if (opening) {
+                renderBlockStatsVisual(latestLocationStats || []);
+            }
+        }
+
+        function toggleVitalCharts() {
+            const container = document.getElementById('vitalChartsContainer');
+            const button = document.getElementById('toggleVitalChartsBtn');
+            const opening = container.style.display === 'none';
+
+            container.style.display = opening ? 'block' : 'none';
+            button.textContent = opening ? 'Hide Vital Charts' : 'Show Vital Charts';
         }
 
         function renderKMeansGraph(clusters, clusterPoints) {
@@ -459,6 +500,126 @@
             });
         }
 
+        function renderBlockStatsVisual(locationStats) {
+            const explanationEl = document.getElementById('blockStatsExplanation');
+            const canvas = document.getElementById('blockStatsChart');
+            const ctx = canvas.getContext('2d');
+
+            if (blockStatsChart) {
+                blockStatsChart.destroy();
+                blockStatsChart = null;
+            }
+
+            if (!locationStats || locationStats.length === 0) {
+                explanationEl.textContent = 'No block statistics available yet.';
+                return;
+            }
+
+            const labels = locationStats.map(s => s.location || 'Unknown');
+            const meanNews2 = locationStats.map(s => Number(s.meanNews2) || 0);
+            const medianNews2 = locationStats.map(s => Number(s.medianNews2) || 0);
+            const incidencePct = locationStats.map(s => (Number(s.incidenceRate) || 0) * 100);
+            const prevalencePct = locationStats.map(s => (Number(s.prevalenceRate) || 0) * 100);
+
+            blockStatsChart = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels,
+                    datasets: [
+                        {
+                            type: 'bar',
+                            label: 'Mean NEWS2',
+                            data: meanNews2,
+                            backgroundColor: 'rgba(102, 126, 234, 0.7)',
+                            borderColor: 'rgba(102, 126, 234, 1)',
+                            borderWidth: 1,
+                            barPercentage: 0.45,
+                            categoryPercentage: 0.65,
+                            maxBarThickness: 72,
+                            yAxisID: 'yNews2'
+                        },
+                        {
+                            type: 'bar',
+                            label: 'Median NEWS2',
+                            data: medianNews2,
+                            backgroundColor: 'rgba(16, 185, 129, 0.7)',
+                            borderColor: 'rgba(16, 185, 129, 1)',
+                            borderWidth: 1,
+                            barPercentage: 0.45,
+                            categoryPercentage: 0.65,
+                            maxBarThickness: 72,
+                            yAxisID: 'yNews2'
+                        },
+                        {
+                            type: 'bar',
+                            label: 'Incidence %',
+                            data: incidencePct,
+                            borderColor: 'rgba(239, 68, 68, 1)',
+                            backgroundColor: 'rgba(239, 68, 68, 0.65)',
+                            borderWidth: 1,
+                            barPercentage: 0.45,
+                            categoryPercentage: 0.65,
+                            maxBarThickness: 72,
+                            yAxisID: 'yPercent'
+                        },
+                        {
+                            type: 'bar',
+                            label: 'Prevalence %',
+                            data: prevalencePct,
+                            borderColor: 'rgba(245, 158, 11, 1)',
+                            backgroundColor: 'rgba(245, 158, 11, 0.65)',
+                            borderWidth: 1,
+                            barPercentage: 0.45,
+                            categoryPercentage: 0.65,
+                            maxBarThickness: 72,
+                            yAxisID: 'yPercent'
+                        }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: { position: 'bottom' },
+                        tooltip: {
+                            callbacks: {
+                                label: function(context) {
+                                    const axis = context.dataset?.yAxisID;
+                                    const value = Number(context.raw) || 0;
+                                    if (axis === 'yPercent') {
+                                        return `${context.dataset.label}: ${value.toFixed(1)}%`;
+                                    }
+                                    return `${context.dataset.label}: ${value.toFixed(2)}`;
+                                }
+                            }
+                        }
+                    },
+                    scales: {
+                        yNews2: {
+                            type: 'linear',
+                            position: 'left',
+                            title: { display: true, text: 'NEWS2' },
+                            beginAtZero: true,
+                            suggestedMax: Math.max(5, ...meanNews2, ...medianNews2) + 0.5
+                        },
+                        yPercent: {
+                            type: 'linear',
+                            position: 'right',
+                            title: { display: true, text: 'Rate (%)' },
+                            beginAtZero: true,
+                            max: 100,
+                            grid: { drawOnChartArea: false }
+                        }
+                    }
+                }
+            });
+
+            const top = locationStats[0];
+            if (top) {
+                explanationEl.textContent = `${top.location}: mean=${toFixedSafe(top.meanNews2, 2)}, median=${toFixedSafe(top.medianNews2, 2)}, std=${toFixedSafe(top.stdDevNews2, 2)}, prevalence=${toFixedSafe((Number(top.prevalenceRate) || 0) * 100, 1)}%, incidence=${toFixedSafe((Number(top.incidenceRate) || 0) * 100, 1)}%, bootstrap 95% CI=[${toFixedSafe(top.bootstrapMeanCiLow, 2)}, ${toFixedSafe(top.bootstrapMeanCiHigh, 2)}].`;
+            }
+        }
+
         async function loadDashboard(options = {}) {
             const { showLoading = false } = options;
             const blockFilter = document.getElementById('blockFilter').value.trim();
@@ -538,19 +699,35 @@
             // Render location stats
             const locationBody = document.getElementById('locationStatsBody');
             locationBody.innerHTML = '';
+            latestLocationStats = data.locationStats || [];
             if (data.locationStats && data.locationStats.length > 0) {
                 data.locationStats.forEach(loc => {
                     const avgNews2 = toFixedSafe(loc.avgNews2, 1);
+                    const incidencePct = Number.isFinite(Number(loc.incidenceRate)) ? `${(Number(loc.incidenceRate) * 100).toFixed(1)}%` : 'N/A';
+                    const prevalencePct = Number.isFinite(Number(loc.prevalenceRate)) ? `${(Number(loc.prevalenceRate) * 100).toFixed(1)}%` : 'N/A';
+                    const ciLow = toFixedSafe(loc.bootstrapMeanCiLow, 2);
+                    const ciHigh = toFixedSafe(loc.bootstrapMeanCiHigh, 2);
                     locationBody.innerHTML += `
                         <tr>
                             <td><strong>${loc.location}</strong></td>
                             <td>${loc.patientCount ?? 0}</td>
                             <td>${avgNews2}</td>
+                            <td>${toFixedSafe(loc.meanNews2, 2)}</td>
+                            <td>${toFixedSafe(loc.medianNews2, 2)}</td>
+                            <td>${toFixedSafe(loc.varianceNews2, 2)}</td>
+                            <td>${toFixedSafe(loc.stdDevNews2, 2)}</td>
+                            <td>${incidencePct}</td>
+                            <td>${prevalencePct}</td>
+                            <td>${ciLow} - ${ciHigh}</td>
                         </tr>
                     `;
                 });
             } else {
-                locationBody.innerHTML = '<tr><td colspan="3" style="text-align:center;">No location data</td></tr>';
+                locationBody.innerHTML = '<tr><td colspan="10" style="text-align:center;">No location data</td></tr>';
+            }
+
+            if (document.getElementById('blockStatsChartContainer').style.display !== 'none') {
+                renderBlockStatsVisual(data.locationStats || []);
             }
 
             // Render patients

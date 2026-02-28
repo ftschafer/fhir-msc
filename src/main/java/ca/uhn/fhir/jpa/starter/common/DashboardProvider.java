@@ -1,10 +1,12 @@
 package ca.uhn.fhir.jpa.starter.common;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.stream.Collectors;
 
 import org.hl7.fhir.instance.model.api.IBaseResource;
@@ -50,6 +52,7 @@ public class DashboardProvider implements IResourceProvider {
     private DashboardStats cachedStats;
     private long cacheTimestamp = 0;
     private static final long CACHE_DURATION_MS = 3000;
+    private static final int BOOTSTRAP_SAMPLES = 300;
 
     public DashboardProvider(DaoRegistry daoRegistry, BlockSocioeconomicAnalysisService socioeconomicAnalysisService) {
         this.daoRegistry = daoRegistry;
@@ -133,6 +136,13 @@ public class DashboardProvider implements IResourceProvider {
             if (news2Score != null) {
                 locStats.totalNews2 += news2Score;
                 locStats.news2Count++;
+                locStats.news2Values.add(news2Score);
+                if (news2Score >= 7) {
+                    locStats.incidentCaseCount++;
+                }
+                if (news2Score >= 5) {
+                    locStats.prevalentCaseCount++;
+                }
             }
             
             // Add patient summary
@@ -147,6 +157,7 @@ public class DashboardProvider implements IResourceProvider {
         stats.totalPatients = patients.size();
         stats.avgNews2Score = queryProjectedAvgNews2();
         stats.locationStats = new ArrayList<>(locationMap.values());
+        finalizeLocationStats(stats.locationStats);
         stats.patients = patientList;
         stats.socioeconomicAnalysis = socioeconomicAnalysisService.analyze(patients, null, configuredBlock);
         
@@ -213,6 +224,46 @@ public class DashboardProvider implements IResourceProvider {
 
         Number avg = (Number) result;
         return avg == null ? 0.0 : avg.doubleValue();
+    }
+
+    private void finalizeLocationStats(List<LocationStats> locationStats) {
+        if (locationStats == null || locationStats.isEmpty()) {
+            return;
+        }
+
+        for (LocationStats stat : locationStats) {
+            stat.computeDistributionMetrics();
+            stat.computeRates();
+            double[] ci = bootstrapMeanConfidenceInterval(stat.news2Values, 0.95, BOOTSTRAP_SAMPLES);
+            stat.bootstrapMeanCiLow = ci[0];
+            stat.bootstrapMeanCiHigh = ci[1];
+        }
+    }
+
+    private double[] bootstrapMeanConfidenceInterval(List<Integer> values, double confidenceLevel, int samples) {
+        if (values == null || values.isEmpty()) {
+            return new double[]{0.0, 0.0};
+        }
+
+        int draws = Math.max(50, samples);
+        int n = values.size();
+        List<Double> resampledMeans = new ArrayList<>(draws);
+
+        for (int sample = 0; sample < draws; sample++) {
+            double sum = 0.0;
+            for (int i = 0; i < n; i++) {
+                int pick = ThreadLocalRandom.current().nextInt(n);
+                sum += values.get(pick);
+            }
+            resampledMeans.add(sum / n);
+        }
+
+        Collections.sort(resampledMeans);
+        double alpha = Math.max(0.0, Math.min(1.0, 1.0 - confidenceLevel));
+        int lowIndex = (int) Math.floor((alpha / 2.0) * (draws - 1));
+        int highIndex = (int) Math.ceil((1.0 - alpha / 2.0) * (draws - 1));
+
+        return new double[]{resampledMeans.get(lowIndex), resampledMeans.get(highIndex)};
     }
 
     private String getRiskLevel(int news2Score) {
@@ -300,7 +351,15 @@ public class DashboardProvider implements IResourceProvider {
             json.append("{");
             json.append("\"location\":\"").append(ls.location).append("\",");
             json.append("\"patientCount\":").append(ls.patientCount).append(",");
-            json.append("\"avgNews2\":").append(String.format(Locale.US, "%.1f", ls.news2Count > 0 ? ls.totalNews2 / ls.news2Count : 0));
+            json.append("\"avgNews2\":").append(String.format(Locale.US, "%.1f", ls.news2Count > 0 ? ls.totalNews2 / ls.news2Count : 0)).append(",");
+            json.append("\"meanNews2\":").append(String.format(Locale.US, "%.3f", ls.meanNews2)).append(",");
+            json.append("\"medianNews2\":").append(String.format(Locale.US, "%.3f", ls.medianNews2)).append(",");
+            json.append("\"varianceNews2\":").append(String.format(Locale.US, "%.3f", ls.varianceNews2)).append(",");
+            json.append("\"stdDevNews2\":").append(String.format(Locale.US, "%.3f", ls.stdDevNews2)).append(",");
+            json.append("\"incidenceRate\":").append(String.format(Locale.US, "%.4f", ls.incidenceRate)).append(",");
+            json.append("\"prevalenceRate\":").append(String.format(Locale.US, "%.4f", ls.prevalenceRate)).append(",");
+            json.append("\"bootstrapMeanCiLow\":").append(String.format(Locale.US, "%.3f", ls.bootstrapMeanCiLow)).append(",");
+            json.append("\"bootstrapMeanCiHigh\":").append(String.format(Locale.US, "%.3f", ls.bootstrapMeanCiHigh));
             json.append("}");
         }
         json.append("],");
@@ -432,9 +491,69 @@ public class DashboardProvider implements IResourceProvider {
         int patientCount;
         double totalNews2;
         int news2Count;
+        List<Integer> news2Values = new ArrayList<>();
+        int incidentCaseCount;
+        int prevalentCaseCount;
+
+        double meanNews2;
+        double medianNews2;
+        double varianceNews2;
+        double stdDevNews2;
+        double incidenceRate;
+        double prevalenceRate;
+        double bootstrapMeanCiLow;
+        double bootstrapMeanCiHigh;
         
         LocationStats(String location) {
             this.location = location;
+        }
+
+        void computeDistributionMetrics() {
+            if (news2Values.isEmpty()) {
+                meanNews2 = 0.0;
+                medianNews2 = 0.0;
+                varianceNews2 = 0.0;
+                stdDevNews2 = 0.0;
+                return;
+            }
+
+            double sum = 0.0;
+            for (int value : news2Values) {
+                sum += value;
+            }
+            meanNews2 = sum / news2Values.size();
+
+            List<Integer> sorted = new ArrayList<>(news2Values);
+            Collections.sort(sorted);
+            int n = sorted.size();
+            if (n % 2 == 0) {
+                medianNews2 = (sorted.get(n / 2 - 1) + sorted.get(n / 2)) / 2.0;
+            } else {
+                medianNews2 = sorted.get(n / 2);
+            }
+
+            if (n > 1) {
+                double varianceSum = 0.0;
+                for (int value : news2Values) {
+                    double diff = value - meanNews2;
+                    varianceSum += diff * diff;
+                }
+                varianceNews2 = varianceSum / (n - 1);
+                stdDevNews2 = Math.sqrt(varianceNews2);
+            } else {
+                varianceNews2 = 0.0;
+                stdDevNews2 = 0.0;
+            }
+        }
+
+        void computeRates() {
+            if (patientCount <= 0) {
+                incidenceRate = 0.0;
+                prevalenceRate = 0.0;
+                return;
+            }
+            incidenceRate = (double) incidentCaseCount / patientCount;
+            prevalenceRate = (double) prevalentCaseCount / patientCount;
         }
     }
 
