@@ -5,7 +5,6 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import java.util.Objects;
 import java.util.stream.Collectors;
 
 import org.hl7.fhir.instance.model.api.IBaseResource;
@@ -33,7 +32,7 @@ import jakarta.servlet.http.HttpServletResponse;
 
 /**
  * Provides a custom dashboard API endpoint that aggregates clinical data
- * Accessible at: GET [base]/Patient/$dashboard-stats?block=Block-A
+ * Accessible at: GET [base]/Patient/$dashboard-stats
  */
 @Component
 public class DashboardProvider implements IResourceProvider {
@@ -69,23 +68,22 @@ public class DashboardProvider implements IResourceProvider {
             HttpServletResponse response) {
         
         try {
-            String filterBlock = blockParam != null ? blockParam.getValue() : null;
-            
-            // Check cache (only if no filter or matches current block)
+            // Block parameter is intentionally ignored: dashboard always aggregates all
+            // patients using the configured block from application.yaml.
+
+            // Check cache
             long now = System.currentTimeMillis();
-            if (cachedStats != null && (now - cacheTimestamp) < CACHE_DURATION_MS && filterBlock == null) {
+            if (cachedStats != null && (now - cacheTimestamp) < CACHE_DURATION_MS) {
                 writeJsonResponse(response, cachedStats);
                 return;
             }
             
             // Calculate fresh stats
-            DashboardStats stats = calculateStats(filterBlock);
+            DashboardStats stats = calculateStats();
             
-            // Update cache (only if no filter)
-            if (filterBlock == null) {
-                cachedStats = stats;
-                cacheTimestamp = now;
-            }
+            // Update cache
+            cachedStats = stats;
+            cacheTimestamp = now;
             
             writeJsonResponse(response, stats);
             
@@ -98,7 +96,7 @@ public class DashboardProvider implements IResourceProvider {
         }
     }
 
-    private DashboardStats calculateStats(String filterBlock) {
+    private DashboardStats calculateStats() {
         DashboardStats stats = new DashboardStats();
         
         // Get all patients
@@ -114,7 +112,7 @@ public class DashboardProvider implements IResourceProvider {
         // Process patients by location
         Map<String, LocationStats> locationMap = new HashMap<>();
         List<PatientSummary> patientList = new ArrayList<>();
-        int filteredPatientCount = 0;
+        String configuredBlock = (currentBlock != null && !currentBlock.isBlank()) ? currentBlock : "Unknown";
         
         for (Patient patient : patients) {
             String patientId = patient.getIdElement().getIdPart();
@@ -126,31 +124,8 @@ public class DashboardProvider implements IResourceProvider {
                 news2Score = ((IntegerType) news2Ext.getValue()).getValue();
             }
             
-            // Get location
-            String location = currentBlock;
-            Extension locationExt = patient.getExtensionByUrl("http://patient-location");
-            if (locationExt != null) {
-                Extension blockExt = locationExt.getExtension().stream()
-                    .filter(e -> "block".equals(e.getUrl()))
-                    .findFirst().orElse(null);
-                if (blockExt != null && blockExt.getValue() instanceof StringType) {
-                    String block = ((StringType) blockExt.getValue()).getValue();
-                    if (block != null && !block.isBlank()) {
-                        location = block;
-                    }
-                }
-            }
-
-            if (location == null || location.isBlank()) {
-                location = "Unknown";
-            }
-            
-            // Filter by block if specified
-            if (filterBlock != null && !filterBlock.isEmpty() && !Objects.equals(location.trim().toLowerCase(Locale.ROOT), filterBlock.trim().toLowerCase(Locale.ROOT))) {
-                continue; // Skip patients not in the requested block
-            }
-
-            filteredPatientCount++;
+            // Always use configured block; patient-level block values are ignored.
+            String location = configuredBlock;
             
             // Add to location stats
             LocationStats locStats = locationMap.computeIfAbsent(location, k -> new LocationStats(k));
@@ -169,11 +144,11 @@ public class DashboardProvider implements IResourceProvider {
             patientList.add(ps);
         }
         
-        stats.totalPatients = filteredPatientCount;
-        stats.avgNews2Score = queryProjectedAvgNews2(filterBlock);
+        stats.totalPatients = patients.size();
+        stats.avgNews2Score = queryProjectedAvgNews2();
         stats.locationStats = new ArrayList<>(locationMap.values());
         stats.patients = patientList;
-        stats.socioeconomicAnalysis = socioeconomicAnalysisService.analyze(patients, filterBlock, currentBlock);
+        stats.socioeconomicAnalysis = socioeconomicAnalysisService.analyze(patients, null, configuredBlock);
         
         // Get active conditions
         IFhirResourceDao<Condition> conditionDao = daoRegistry.getResourceDao(Condition.class);
@@ -232,17 +207,9 @@ public class DashboardProvider implements IResourceProvider {
         return stats;
     }
 
-    private double queryProjectedAvgNews2(String filterBlock) {
-        Object result;
-        if (filterBlock != null && !filterBlock.isBlank()) {
-            result = em.createNativeQuery(
-                            "SELECT COALESCE(AVG(news2), 0) FROM patient_news2_current WHERE LOWER(block_id) = LOWER(?)")
-                    .setParameter(1, filterBlock)
-                    .getSingleResult();
-        } else {
-            result = em.createNativeQuery("SELECT COALESCE(AVG(news2), 0) FROM patient_news2_current")
-                    .getSingleResult();
-        }
+    private double queryProjectedAvgNews2() {
+        Object result = em.createNativeQuery("SELECT COALESCE(AVG(news2), 0) FROM patient_news2_current")
+                .getSingleResult();
 
         Number avg = (Number) result;
         return avg == null ? 0.0 : avg.doubleValue();
@@ -402,14 +369,14 @@ public class DashboardProvider implements IResourceProvider {
             json.append("{");
             json.append("\"clusterId\":").append(profile.clusterId()).append(",");
             json.append("\"patientCount\":").append(profile.patientCount()).append(",");
-            json.append("\"avgNews2\":").append(String.format(Locale.US, "%.2f", profile.avgNews2())).append(",");
+            json.append("\"avgHeartRate\":").append(String.format(Locale.US, "%.2f", profile.avgHeartRate())).append(",");
+            json.append("\"avgSystolicPressure\":").append(String.format(Locale.US, "%.2f", profile.avgSystolicPressure())).append(",");
             json.append("\"avgAge\":").append(String.format(Locale.US, "%.2f", profile.avgAge())).append(",");
             json.append("\"avgConditions\":").append(String.format(Locale.US, "%.2f", profile.avgConditions())).append(",");
             json.append("\"pctMale\":").append(String.format(Locale.US, "%.2f", profile.pctMale())).append(",");
             json.append("\"pctFemale\":").append(String.format(Locale.US, "%.2f", profile.pctFemale())).append(",");
-            json.append("\"pctLowRisk\":").append(String.format(Locale.US, "%.2f", profile.pctLowRisk())).append(",");
-            json.append("\"pctMediumRisk\":").append(String.format(Locale.US, "%.2f", profile.pctMediumRisk())).append(",");
-            json.append("\"pctHighRisk\":").append(String.format(Locale.US, "%.2f", profile.pctHighRisk())).append(",");
+            json.append("\"pc1\":").append(String.format(Locale.US, "%.3f", profile.pc1())).append(",");
+            json.append("\"pc2\":").append(String.format(Locale.US, "%.3f", profile.pc2())).append(",");
             json.append("\"profileLabel\":\"").append(escapeJson(profile.profileLabel())).append("\"");
             json.append("}");
         }
@@ -421,13 +388,14 @@ public class DashboardProvider implements IResourceProvider {
             json.append("{");
             json.append("\"patientId\":\"").append(escapeJson(point.patientId())).append("\",");
             json.append("\"clusterId\":").append(point.clusterId()).append(",");
-            json.append("\"news2\":").append(point.news2()).append(",");
+            json.append("\"heartRate\":").append(point.heartRate()).append(",");
+            json.append("\"systolicPressure\":").append(point.systolicPressure()).append(",");
             json.append("\"age\":").append(point.age()).append(",");
             json.append("\"activeConditions\":").append(point.activeConditions()).append(",");
-            json.append("\"riskBand\":").append(point.riskBand()).append(",");
-            json.append("\"elderlyFlag\":").append(point.elderlyFlag()).append(",");
             json.append("\"maleFlag\":").append(point.maleFlag()).append(",");
-            json.append("\"femaleFlag\":").append(point.femaleFlag());
+            json.append("\"femaleFlag\":").append(point.femaleFlag()).append(",");
+            json.append("\"pc1\":").append(String.format(Locale.US, "%.3f", point.pc1())).append(",");
+            json.append("\"pc2\":").append(String.format(Locale.US, "%.3f", point.pc2()));
             json.append("}");
         }
         json.append("]}");

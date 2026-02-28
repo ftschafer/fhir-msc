@@ -268,7 +268,7 @@
 
             <div class="data-section">
                 <h2 class="section-title">🧠 Socioeconomic Cluster Profiles (K-Means)</h2>
-                <p style="color: #666; margin-bottom: 15px;">Block-level clustering by NEWS2, age, and risk distribution.</p>
+                <p style="color: #666; margin-bottom: 15px;">Block-level clustering on standardized features (HR, SBP, age, sex, active conditions), visualized with PCA.</p>
                 <p id="clusterQuality" style="color: #444; margin-bottom: 12px; font-size: 13px;"></p>
                 <div style="margin-bottom: 12px;">
                     <button id="toggleKmeansGraphBtn" onclick="toggleKMeansGraph()" style="padding: 8px 14px; background: #667eea; color: #fff; border: none; border-radius: 6px; cursor: pointer; font-weight: 600;">Show K-Means Graph</button>
@@ -281,14 +281,12 @@
                         <tr>
                             <th>Cluster</th>
                             <th>Patients</th>
-                            <th>Avg NEWS2</th>
+                            <th>Avg Heart Rate</th>
+                            <th>Avg Systolic BP</th>
                             <th>Avg Age</th>
                             <th>Avg Active Conditions</th>
                             <th>Male %</th>
                             <th>Female %</th>
-                            <th>Low Risk %</th>
-                            <th>Medium Risk %</th>
-                            <th>High Risk %</th>
                             <th>Profile</th>
                         </tr>
                     </thead>
@@ -394,8 +392,8 @@
                     byCluster.set(clusterId, []);
                 }
                 byCluster.get(clusterId).push({
-                    x: Number(p.age) || 0,
-                    y: Number(p.news2) || 0,
+                    x: Number(p.pc1) || 0,
+                    y: Number(p.pc2) || 0,
                     r: 4
                 });
             });
@@ -420,8 +418,8 @@
                     datasets.push({
                         label: `C${clusterId} centroid`,
                         data: [{
-                            x: Number(centroid.avgAge) || 0,
-                            y: Number(centroid.avgNews2) || 0,
+                            x: Number(centroid.pc1) || 0,
+                            y: Number(centroid.pc2) || 0,
                             r: Math.max(8, Math.min(20, (Number(centroid.patientCount) || 1) * 0.8))
                         }],
                         backgroundColor: color.replace('0.7', '1'),
@@ -444,19 +442,17 @@
                                 label: function(context) {
                                     const ds = context.dataset || {};
                                     const raw = context.raw || {};
-                                    return `${ds.label}: age=${toFixedSafe(raw.x, 1)}, NEWS2=${toFixedSafe(raw.y, 2)}`;
+                                    return `${ds.label}: PC1=${toFixedSafe(raw.x, 2)}, PC2=${toFixedSafe(raw.y, 2)}`;
                                 }
                             }
                         }
                     },
                     scales: {
                         x: {
-                            title: { display: true, text: 'Average Age' },
-                            min: 0
+                            title: { display: true, text: 'PC1' }
                         },
                         y: {
-                            title: { display: true, text: 'Average NEWS2' },
-                            min: 0
+                            title: { display: true, text: 'PC2' }
                         }
                     }
                 }
@@ -600,20 +596,18 @@
                         <tr>
                             <td><strong>C${c.clusterId}</strong></td>
                             <td>${c.patientCount ?? 0}</td>
-                            <td>${toFixedSafe(c.avgNews2, 2)}</td>
+                            <td>${toFixedSafe(c.avgHeartRate, 2)}</td>
+                            <td>${toFixedSafe(c.avgSystolicPressure, 2)}</td>
                             <td>${toFixedSafe(c.avgAge, 1)}</td>
                             <td>${toFixedSafe(c.avgConditions, 2)}</td>
                             <td>${toFixedSafe(c.pctMale, 1)}%</td>
                             <td>${toFixedSafe(c.pctFemale, 1)}%</td>
-                            <td class="risk-low">${toFixedSafe(c.pctLowRisk, 1)}%</td>
-                            <td class="risk-medium">${toFixedSafe(c.pctMediumRisk, 1)}%</td>
-                            <td class="risk-high">${toFixedSafe(c.pctHighRisk, 1)}%</td>
                             <td>${c.profileLabel || 'N/A'}</td>
                         </tr>
                     `;
                 });
             } else {
-                clusterBody.innerHTML = '<tr><td colspan="11" style="text-align:center;">No cluster analysis available</td></tr>';
+                clusterBody.innerHTML = '<tr><td colspan="9" style="text-align:center;">No cluster analysis available</td></tr>';
             }
 
             if (document.getElementById('kmeansGraphContainer').style.display !== 'none') {

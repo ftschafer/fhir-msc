@@ -141,8 +141,12 @@ public class ScheduledVitalSignAggregationService {
                 if (upstreamForwarder != null) {
                     try {
                         logger.info("Forwarding {} aggregate observations to upstream server", persistedAggregates.size());
-                        upstreamForwarder.createObservations(persistedAggregates);
-                        logger.info("✓ Successfully forwarded aggregate observations");
+                        boolean forwarded = upstreamForwarder.createObservations(persistedAggregates);
+                        if (forwarded) {
+                            logger.info("✓ Successfully forwarded aggregate observations");
+                        } else {
+                            logger.warn("Aggregate observations were not forwarded (upstream unavailable/suppressed)");
+                        }
                     } catch (Exception e) {
                         logger.error("Failed to forward aggregate observations", e);
                     }

@@ -8,10 +8,8 @@ import ca.uhn.fhir.rest.param.TokenParam;
 import org.hl7.fhir.instance.model.api.IBaseResource;
 import org.hl7.fhir.r4.model.Condition;
 import org.hl7.fhir.r4.model.DateType;
-import org.hl7.fhir.r4.model.Extension;
-import org.hl7.fhir.r4.model.IntegerType;
+import org.hl7.fhir.r4.model.Observation;
 import org.hl7.fhir.r4.model.Patient;
-import org.hl7.fhir.r4.model.StringType;
 import org.hl7.fhir.r4.model.Enumerations;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
@@ -19,6 +17,7 @@ import org.springframework.stereotype.Service;
 import java.time.LocalDate;
 import java.time.ZoneId;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -28,9 +27,8 @@ import java.util.Random;
 @Service
 public class BlockSocioeconomicAnalysisService {
 
-    private static final String NEWS2_EXTENSION_URL = "http://news2-score";
-    private static final String LOCATION_EXTENSION_URL = "http://patient-location";
-    private static final String BLOCK_URL = "block";
+    private static final String HEART_RATE_CODE = "8867-4";
+    private static final String SYSTOLIC_BP_CODE = "8480-6";
     private final DaoRegistry daoRegistry;
 
     @Value("${hapi.fhir.analysis.socioeconomic.kmeans.max-k:6}")
@@ -48,27 +46,6 @@ public class BlockSocioeconomicAnalysisService {
     @Value("${hapi.fhir.analysis.socioeconomic.kmeans.max-singleton-ratio:0.20}")
     private double maxSingletonRatio;
 
-    @Value("${hapi.fhir.analysis.socioeconomic.kmeans.weight-news2:1.4}")
-    private double weightNews2;
-
-    @Value("${hapi.fhir.analysis.socioeconomic.kmeans.weight-age:0.9}")
-    private double weightAge;
-
-    @Value("${hapi.fhir.analysis.socioeconomic.kmeans.weight-active-conditions:1.2}")
-    private double weightActiveConditions;
-
-    @Value("${hapi.fhir.analysis.socioeconomic.kmeans.weight-risk-band:1.3}")
-    private double weightRiskBand;
-
-    @Value("${hapi.fhir.analysis.socioeconomic.kmeans.weight-elderly-flag:0.8}")
-    private double weightElderlyFlag;
-
-    @Value("${hapi.fhir.analysis.socioeconomic.kmeans.weight-male-flag:0.35}")
-    private double weightMaleFlag;
-
-    @Value("${hapi.fhir.analysis.socioeconomic.kmeans.weight-female-flag:0.35}")
-    private double weightFemaleFlag;
-
     public BlockSocioeconomicAnalysisService(DaoRegistry daoRegistry) {
         this.daoRegistry = daoRegistry;
     }
@@ -78,9 +55,11 @@ public class BlockSocioeconomicAnalysisService {
             return AnalysisOutput.empty();
         }
 
+        String configuredBlock = (defaultBlock != null && !defaultBlock.isBlank()) ? defaultBlock : "Unknown";
         List<FeatureRow> rows = new ArrayList<>();
         LocalDate now = LocalDate.now();
         Map<String, Integer> activeConditionsByPatient = loadActiveConditionCountsByPatientId();
+        Map<String, VitalSigns> vitalSignsByPatient = loadLatestVitalSignsByPatientId();
 
         for (Patient patient : patients) {
             String patientId = patient.getIdElement().getIdPart();
@@ -88,37 +67,33 @@ public class BlockSocioeconomicAnalysisService {
                 continue;
             }
 
-            String block = extractBlock(patient);
-            if (block == null || block.isBlank()) {
-                block = defaultBlock;
-            }
-            if (block == null || block.isBlank()) {
-                block = "Unknown";
-            }
+            String block = configuredBlock;
 
-            if (filterBlock != null && !filterBlock.isBlank() && !block.equalsIgnoreCase(filterBlock)) {
+            VitalSigns vitalSigns = vitalSignsByPatient.get(patientId);
+            if (vitalSigns == null) {
                 continue;
             }
 
-            int news2 = extractNews2(patient);
+            int heartRate = vitalSigns.heartRate();
+            int systolicPressure = vitalSigns.systolicPressure();
             int age = extractAge(patient, now, patientId);
             int activeConditions = activeConditionsByPatient.getOrDefault(patientId, 0);
-            int riskBand = classifyRiskBand(news2);
-            int elderlyFlag = age >= 65 ? 1 : 0;
+            double sexEncoded = extractSexEncoded(patient);
             int maleFlag = extractMaleFlag(patient);
             int femaleFlag = extractFemaleFlag(patient);
 
-            rows.add(new FeatureRow(patientId, block, news2, age, activeConditions, riskBand, elderlyFlag, maleFlag, femaleFlag));
+            rows.add(new FeatureRow(patientId, block, heartRate, systolicPressure, age, sexEncoded, activeConditions, maleFlag, femaleFlag));
         }
 
         if (rows.isEmpty()) {
             return AnalysisOutput.empty();
         }
 
-        List<double[]> normalized = normalize(rows);
-        KMeansSelectionResult selected = selectBestModel(normalized);
-        List<ClusterProfile> profiles = toProfiles(rows, selected.assignment, selected.k);
-        List<ClusterPoint> points = toClusterPoints(rows, selected.assignment, selected.k);
+        List<double[]> standardized = standardizeFeatures(rows);
+        KMeansSelectionResult selected = selectBestModel(standardized);
+        List<double[]> pcaProjection = projectPca2D(standardized);
+        List<ClusterProfile> profiles = toProfiles(rows, selected.assignment, selected.k, pcaProjection);
+        List<ClusterPoint> points = toClusterPoints(rows, selected.assignment, selected.k, pcaProjection);
 
         AnalysisQuality quality = new AnalysisQuality(
                 selected.k,
@@ -135,8 +110,8 @@ public class BlockSocioeconomicAnalysisService {
         return new AnalysisOutput(rows.size(), selected.k, profiles, points, quality);
     }
 
-    private KMeansSelectionResult selectBestModel(List<double[]> normalized) {
-        int n = normalized.size();
+    private KMeansSelectionResult selectBestModel(List<double[]> standardizedFeatures) {
+        int n = standardizedFeatures.size();
         if (n < 2) {
             return new KMeansSelectionResult(1, new int[]{0}, 0.0, 0.0, 0.0, 1, 1, 0, false);
         }
@@ -150,8 +125,8 @@ public class BlockSocioeconomicAnalysisService {
 
         for (int k = 2; k <= maxK; k++) {
             for (int run = 0; run < runs; run++) {
-                KMeansResult result = runKMeans(normalized, k, 12345L + (31L * k) + run);
-                double silhouette = silhouette(result.assignment, normalized, k);
+                KMeansResult result = runKMeans(standardizedFeatures, k, 12345L + (31L * k) + run);
+                double silhouette = silhouette(result.assignment, standardizedFeatures, k);
                 ClusterShape shape = evaluateClusterShape(result.assignment, k);
 
                 boolean singletonHeavy = ((double) shape.singletonClusters / (double) k) > maxSingletonRatio;
@@ -388,61 +363,154 @@ public class BlockSocioeconomicAnalysisService {
         return sum;
     }
 
-    private List<double[]> normalize(List<FeatureRow> rows) {
-        double minNews2 = rows.stream().mapToDouble(FeatureRow::news2).min().orElse(0);
-        double maxNews2 = rows.stream().mapToDouble(FeatureRow::news2).max().orElse(1);
-        double minAge = rows.stream().mapToDouble(FeatureRow::age).min().orElse(0);
-        double maxAge = rows.stream().mapToDouble(FeatureRow::age).max().orElse(1);
-        double minConditions = rows.stream().mapToDouble(FeatureRow::activeConditions).min().orElse(0);
-        double maxConditions = rows.stream().mapToDouble(FeatureRow::activeConditions).max().orElse(1);
-        double minRiskBand = rows.stream().mapToDouble(FeatureRow::riskBand).min().orElse(0);
-        double maxRiskBand = rows.stream().mapToDouble(FeatureRow::riskBand).max().orElse(1);
-        double minElderlyFlag = rows.stream().mapToDouble(FeatureRow::elderlyFlag).min().orElse(0);
-        double maxElderlyFlag = rows.stream().mapToDouble(FeatureRow::elderlyFlag).max().orElse(1);
-        double minMaleFlag = rows.stream().mapToDouble(FeatureRow::maleFlag).min().orElse(0);
-        double maxMaleFlag = rows.stream().mapToDouble(FeatureRow::maleFlag).max().orElse(1);
-        double minFemaleFlag = rows.stream().mapToDouble(FeatureRow::femaleFlag).min().orElse(0);
-        double maxFemaleFlag = rows.stream().mapToDouble(FeatureRow::femaleFlag).max().orElse(1);
+    private List<double[]> standardizeFeatures(List<FeatureRow> rows) {
+        int featureCount = 5;
+        double[] means = new double[featureCount];
+        double[] stdDevs = new double[featureCount];
 
-        List<double[]> out = new ArrayList<>();
+        List<double[]> matrix = new ArrayList<>(rows.size());
         for (FeatureRow row : rows) {
-            out.add(new double[]{
-                    scale(row.news2, minNews2, maxNews2) * weightNews2,
-                    scale(row.age, minAge, maxAge) * weightAge,
-                    scale(row.activeConditions, minConditions, maxConditions) * weightActiveConditions,
-                    scale(row.riskBand, minRiskBand, maxRiskBand) * weightRiskBand,
-                    scale(row.elderlyFlag, minElderlyFlag, maxElderlyFlag) * weightElderlyFlag,
-                    scale(row.maleFlag, minMaleFlag, maxMaleFlag) * weightMaleFlag,
-                    scale(row.femaleFlag, minFemaleFlag, maxFemaleFlag) * weightFemaleFlag
-            });
+            double[] vector = new double[]{
+                    row.heartRate,
+                    row.systolicPressure,
+                    row.age,
+                    row.sexEncoded,
+                    row.activeConditions
+            };
+            matrix.add(vector);
+            for (int i = 0; i < featureCount; i++) {
+                means[i] += vector[i];
+            }
+        }
+
+        for (int i = 0; i < featureCount; i++) {
+            means[i] /= rows.size();
+        }
+
+        for (double[] vector : matrix) {
+            for (int i = 0; i < featureCount; i++) {
+                double diff = vector[i] - means[i];
+                stdDevs[i] += diff * diff;
+            }
+        }
+
+        for (int i = 0; i < featureCount; i++) {
+            stdDevs[i] = Math.sqrt(stdDevs[i] / Math.max(1, rows.size() - 1));
+        }
+
+        List<double[]> standardized = new ArrayList<>(rows.size());
+        for (double[] vector : matrix) {
+            double[] z = new double[featureCount];
+            for (int i = 0; i < featureCount; i++) {
+                z[i] = stdDevs[i] > 0.0 ? (vector[i] - means[i]) / stdDevs[i] : 0.0;
+            }
+            standardized.add(z);
+        }
+        return standardized;
+    }
+
+    private List<double[]> projectPca2D(List<double[]> standardizedFeatures) {
+        if (standardizedFeatures.isEmpty()) {
+            return List.of();
+        }
+
+        int dimension = standardizedFeatures.get(0).length;
+        double[][] covariance = covarianceMatrix(standardizedFeatures, dimension);
+
+        double[] pc1Vector = dominantEigenvector(covariance, 120);
+        double eigenvalue1 = eigenvalue(covariance, pc1Vector);
+
+        double[][] deflated = deflate(covariance, pc1Vector, eigenvalue1);
+        double[] pc2Vector = dominantEigenvector(deflated, 120);
+
+        List<double[]> projection = new ArrayList<>(standardizedFeatures.size());
+        for (double[] row : standardizedFeatures) {
+            projection.add(new double[]{dot(row, pc1Vector), dot(row, pc2Vector)});
+        }
+        return projection;
+    }
+
+    private double[][] covarianceMatrix(List<double[]> points, int dimension) {
+        double[][] cov = new double[dimension][dimension];
+        if (points.size() < 2) {
+            return cov;
+        }
+
+        for (double[] row : points) {
+            for (int i = 0; i < dimension; i++) {
+                for (int j = 0; j < dimension; j++) {
+                    cov[i][j] += row[i] * row[j];
+                }
+            }
+        }
+
+        double denom = points.size() - 1.0;
+        for (int i = 0; i < dimension; i++) {
+            for (int j = 0; j < dimension; j++) {
+                cov[i][j] /= denom;
+            }
+        }
+        return cov;
+    }
+
+    private double[] dominantEigenvector(double[][] matrix, int iterations) {
+        int n = matrix.length;
+        double[] vector = new double[n];
+        Arrays.fill(vector, 1.0 / Math.sqrt(Math.max(1, n)));
+
+        for (int iter = 0; iter < iterations; iter++) {
+            double[] next = multiply(matrix, vector);
+            double norm = norm(next);
+            if (norm == 0.0) {
+                return vector;
+            }
+            for (int i = 0; i < n; i++) {
+                next[i] /= norm;
+            }
+            vector = next;
+        }
+        return vector;
+    }
+
+    private double eigenvalue(double[][] matrix, double[] vector) {
+        double[] mv = multiply(matrix, vector);
+        return dot(vector, mv);
+    }
+
+    private double[][] deflate(double[][] matrix, double[] eigenvector, double eigenvalue) {
+        int n = matrix.length;
+        double[][] out = new double[n][n];
+        for (int i = 0; i < n; i++) {
+            for (int j = 0; j < n; j++) {
+                out[i][j] = matrix[i][j] - eigenvalue * eigenvector[i] * eigenvector[j];
+            }
         }
         return out;
     }
 
-    private double scale(double value, double min, double max) {
-        if (max <= min) return 0;
-        return (value - min) / (max - min);
-    }
-
-    private int extractNews2(Patient patient) {
-        Extension ext = patient.getExtensionByUrl(NEWS2_EXTENSION_URL);
-        if (ext != null && ext.getValue() instanceof IntegerType it && it.getValue() != null) {
-            return it.getValue();
-        }
-        return 0;
-    }
-
-    private String extractBlock(Patient patient) {
-        Extension locationExtension = patient.getExtensionByUrl(LOCATION_EXTENSION_URL);
-        if (locationExtension == null) {
-            return null;
-        }
-        for (Extension nested : locationExtension.getExtension()) {
-            if (BLOCK_URL.equals(nested.getUrl()) && nested.getValue() instanceof StringType st) {
-                return st.getValue();
+    private double[] multiply(double[][] matrix, double[] vector) {
+        int n = matrix.length;
+        double[] out = new double[n];
+        for (int i = 0; i < n; i++) {
+            double sum = 0.0;
+            for (int j = 0; j < n; j++) {
+                sum += matrix[i][j] * vector[j];
             }
+            out[i] = sum;
         }
-        return null;
+        return out;
+    }
+
+    private double dot(double[] a, double[] b) {
+        double sum = 0.0;
+        for (int i = 0; i < a.length; i++) {
+            sum += a[i] * b[i];
+        }
+        return sum;
+    }
+
+    private double norm(double[] vector) {
+        return Math.sqrt(dot(vector, vector));
     }
 
     private int extractAge(Patient patient, LocalDate now, String patientId) {
@@ -505,16 +573,6 @@ public class BlockSocioeconomicAnalysisService {
         return trimmed;
     }
 
-    private int classifyRiskBand(int news2) {
-        if (news2 >= 7) {
-            return 2;
-        }
-        if (news2 >= 5) {
-            return 1;
-        }
-        return 0;
-    }
-
     private int extractMaleFlag(Patient patient) {
         return patient != null && patient.getGender() == Enumerations.AdministrativeGender.MALE ? 1 : 0;
     }
@@ -523,31 +581,115 @@ public class BlockSocioeconomicAnalysisService {
         return patient != null && patient.getGender() == Enumerations.AdministrativeGender.FEMALE ? 1 : 0;
     }
 
+    private double extractSexEncoded(Patient patient) {
+        if (patient == null || patient.getGender() == null) {
+            return 0.5;
+        }
+        if (patient.getGender() == Enumerations.AdministrativeGender.MALE) {
+            return 1.0;
+        }
+        if (patient.getGender() == Enumerations.AdministrativeGender.FEMALE) {
+            return 0.0;
+        }
+        return 0.5;
+    }
+
+    private Map<String, VitalSigns> loadLatestVitalSignsByPatientId() {
+        Map<String, Observation> latestHeartRateByPatient = new HashMap<>();
+        Map<String, Observation> latestSystolicByPatient = new HashMap<>();
+
+        IFhirResourceDao<Observation> observationDao = daoRegistry.getResourceDao(Observation.class);
+        SearchParameterMap search = new SearchParameterMap();
+        search.add("category", new TokenParam("http://terminology.hl7.org/CodeSystem/observation-category", "vital-signs"));
+        search.setLoadSynchronous(true);
+
+        IBundleProvider results = observationDao.search(search);
+        for (IBaseResource resource : results.getAllResources()) {
+            if (!(resource instanceof Observation observation) || observation.getSubject() == null || observation.getValueQuantity() == null) {
+                continue;
+            }
+
+            String patientId = extractPatientIdFromReference(observation.getSubject().getReference());
+            if (patientId == null || patientId.isBlank()) {
+                continue;
+            }
+
+            String code = observation.getCode() != null && observation.getCode().hasCoding()
+                    ? observation.getCode().getCodingFirstRep().getCode()
+                    : null;
+            if (code == null) {
+                continue;
+            }
+
+            if (HEART_RATE_CODE.equals(code)) {
+                Observation current = latestHeartRateByPatient.get(patientId);
+                if (current == null || isObservationNewer(observation, current)) {
+                    latestHeartRateByPatient.put(patientId, observation);
+                }
+            } else if (SYSTOLIC_BP_CODE.equals(code)) {
+                Observation current = latestSystolicByPatient.get(patientId);
+                if (current == null || isObservationNewer(observation, current)) {
+                    latestSystolicByPatient.put(patientId, observation);
+                }
+            }
+        }
+
+        Map<String, VitalSigns> out = new HashMap<>();
+        for (String patientId : latestHeartRateByPatient.keySet()) {
+            Observation hrObs = latestHeartRateByPatient.get(patientId);
+            Observation sbpObs = latestSystolicByPatient.get(patientId);
+            if (hrObs == null || sbpObs == null) {
+                continue;
+            }
+
+            int heartRate = hrObs.getValueQuantity().getValue() != null ? hrObs.getValueQuantity().getValue().intValue() : 0;
+            int systolicPressure = sbpObs.getValueQuantity().getValue() != null ? sbpObs.getValueQuantity().getValue().intValue() : 0;
+            if (heartRate <= 0 || systolicPressure <= 0) {
+                continue;
+            }
+
+            out.put(patientId, new VitalSigns(heartRate, systolicPressure));
+        }
+
+        return out;
+    }
+
+    private boolean isObservationNewer(Observation candidate, Observation current) {
+        java.util.Date candidateUpdated = candidate.getMeta() != null ? candidate.getMeta().getLastUpdated() : null;
+        java.util.Date currentUpdated = current.getMeta() != null ? current.getMeta().getLastUpdated() : null;
+
+        if (candidateUpdated != null && currentUpdated != null) {
+            return candidateUpdated.after(currentUpdated);
+        }
+        if (candidateUpdated != null) {
+            return true;
+        }
+        if (currentUpdated != null) {
+            return false;
+        }
+
+        java.util.Date candidateEffective = candidate.getEffectiveDateTimeType() != null ? candidate.getEffectiveDateTimeType().getValue() : null;
+        java.util.Date currentEffective = current.getEffectiveDateTimeType() != null ? current.getEffectiveDateTimeType().getValue() : null;
+        if (candidateEffective != null && currentEffective != null) {
+            return candidateEffective.after(currentEffective);
+        }
+        return candidateEffective != null;
+    }
+
     private record FeatureRow(
             String patientId,
             String block,
-            int news2,
+            int heartRate,
+            int systolicPressure,
             int age,
+            double sexEncoded,
             int activeConditions,
-            int riskBand,
-            int elderlyFlag,
             int maleFlag,
             int femaleFlag
     ) {
-        private FeatureRow(
-            String patientId,
-            String block,
-            int news2,
-            int age,
-            int activeConditions,
-            int riskBand,
-            int elderlyFlag
-        ) {
-            this(patientId, block, news2, age, activeConditions, riskBand, elderlyFlag, 0, 0);
-        }
     }
 
-    private List<ClusterProfile> toProfiles(List<FeatureRow> rows, int[] assignment, int k) {
+    private List<ClusterProfile> toProfiles(List<FeatureRow> rows, int[] assignment, int k, List<double[]> pcaProjection) {
         List<ClusterAccumulator> acc = new ArrayList<>();
         for (int i = 0; i < k; i++) {
             acc.add(new ClusterAccumulator(i));
@@ -558,7 +700,8 @@ public class BlockSocioeconomicAnalysisService {
             if (cluster < 0 || cluster >= k) {
                 continue;
             }
-            acc.get(cluster).accept(rows.get(i));
+            double[] pc = i < pcaProjection.size() ? pcaProjection.get(i) : new double[]{0.0, 0.0};
+            acc.get(cluster).accept(rows.get(i), pc[0], pc[1]);
         }
 
         List<ClusterProfile> profiles = new ArrayList<>();
@@ -567,7 +710,7 @@ public class BlockSocioeconomicAnalysisService {
             profiles.add(c.toProfile());
         }
 
-        profiles.sort((a, b) -> Double.compare(b.avgNews2, a.avgNews2));
+        profiles.sort((a, b) -> Double.compare(b.avgHeartRate, a.avgHeartRate));
         return profiles;
     }
 
@@ -603,14 +746,14 @@ public class BlockSocioeconomicAnalysisService {
     public record ClusterProfile(
             int clusterId,
             int patientCount,
-            double avgNews2,
+            double avgHeartRate,
+            double avgSystolicPressure,
             double avgAge,
             double avgConditions,
             double pctMale,
             double pctFemale,
-            double pctLowRisk,
-            double pctMediumRisk,
-            double pctHighRisk,
+            double pc1,
+            double pc2,
             String profileLabel
     ) {
     }
@@ -618,17 +761,18 @@ public class BlockSocioeconomicAnalysisService {
     public record ClusterPoint(
             String patientId,
             int clusterId,
-            int news2,
+            int heartRate,
+            int systolicPressure,
             int age,
             int activeConditions,
-            int riskBand,
-            int elderlyFlag,
             int maleFlag,
-            int femaleFlag
+                int femaleFlag,
+                double pc1,
+                double pc2
     ) {
     }
 
-    private List<ClusterPoint> toClusterPoints(List<FeatureRow> rows, int[] assignment, int k) {
+            private List<ClusterPoint> toClusterPoints(List<FeatureRow> rows, int[] assignment, int k, List<double[]> pcaProjection) {
         List<ClusterPoint> points = new ArrayList<>();
         int size = Math.min(rows.size(), assignment.length);
         for (int i = 0; i < size; i++) {
@@ -637,16 +781,18 @@ public class BlockSocioeconomicAnalysisService {
                 continue;
             }
             FeatureRow row = rows.get(i);
+                double[] pc = i < pcaProjection.size() ? pcaProjection.get(i) : new double[]{0.0, 0.0};
             points.add(new ClusterPoint(
                     row.patientId,
                     clusterId,
-                    row.news2,
+                    row.heartRate,
+                    row.systolicPressure,
                     row.age,
                     row.activeConditions,
-                    row.riskBand,
-                    row.elderlyFlag,
                     row.maleFlag,
-                    row.femaleFlag
+                    row.femaleFlag,
+                    round(pc[0]),
+                    round(pc[1])
             ));
         }
         return points;
@@ -655,57 +801,50 @@ public class BlockSocioeconomicAnalysisService {
     private static class ClusterAccumulator {
         private final int clusterId;
         private int size;
-        private double news2Sum;
+        private double heartRateSum;
+        private double systolicPressureSum;
         private double ageSum;
         private double activeConditionsSum;
         private int maleCount;
         private int femaleCount;
-        private int lowRisk;
-        private int mediumRisk;
-        private int highRisk;
+        private double pc1Sum;
+        private double pc2Sum;
 
         private ClusterAccumulator(int clusterId) {
             this.clusterId = clusterId;
         }
 
-        private void accept(FeatureRow row) {
+        private void accept(FeatureRow row, double pc1, double pc2) {
             size++;
-            news2Sum += row.news2;
+            heartRateSum += row.heartRate;
+            systolicPressureSum += row.systolicPressure;
             ageSum += row.age;
             activeConditionsSum += row.activeConditions;
             maleCount += row.maleFlag;
             femaleCount += row.femaleFlag;
-
-            if (row.news2 >= 7) {
-                highRisk++;
-            } else if (row.news2 >= 5) {
-                mediumRisk++;
-            } else {
-                lowRisk++;
-            }
+            pc1Sum += pc1;
+            pc2Sum += pc2;
         }
 
         private ClusterProfile toProfile() {
-            double avgNews2 = news2Sum / size;
+            double avgHeartRate = heartRateSum / size;
+            double avgSystolicPressure = systolicPressureSum / size;
             double avgAge = ageSum / size;
             double avgConditions = activeConditionsSum / size;
             double pctMale = (maleCount * 100.0) / size;
             double pctFemale = (femaleCount * 100.0) / size;
-            double pctLow = (lowRisk * 100.0) / size;
-            double pctMedium = (mediumRisk * 100.0) / size;
-            double pctHigh = (highRisk * 100.0) / size;
 
             String label;
-            if (pctHigh >= 40.0 || avgNews2 >= 7.0) {
-                label = "High-risk clinical cluster";
-            } else if (pctMedium >= 40.0 || avgNews2 >= 5.0) {
+            if (avgHeartRate >= 100.0 || avgSystolicPressure >= 140.0) {
+                label = "Hemodynamic high-strain cluster";
+            } else if (avgHeartRate >= 85.0 || avgSystolicPressure >= 125.0) {
                 label = avgAge >= 65.0
-                        ? "Older-population medium-risk cluster"
-                        : "Medium-risk clinical cluster";
+                        ? "Older-population moderate-vitals cluster"
+                        : "Moderate-vitals cluster";
             } else if (avgAge >= 65.0) {
-                label = "Older-population lower-risk cluster";
+                label = "Older-population lower-vitals-strain cluster";
             } else {
-                label = "Lower-risk clinical cluster";
+                label = "Lower-vitals-strain cluster";
             }
 
             if (pctMale >= 65.0) {
@@ -717,14 +856,14 @@ public class BlockSocioeconomicAnalysisService {
             return new ClusterProfile(
                     clusterId,
                     size,
-                    round(avgNews2),
+                    round(avgHeartRate),
+                    round(avgSystolicPressure),
                     round(avgAge),
                     round(avgConditions),
                     round(pctMale),
                     round(pctFemale),
-                    round(pctLow),
-                    round(pctMedium),
-                    round(pctHigh),
+                        round(pc1Sum / size),
+                        round(pc2Sum / size),
                     label
             );
         }
@@ -751,5 +890,8 @@ public class BlockSocioeconomicAnalysisService {
     }
 
     private record ClusterShape(int minClusterObserved, int singletonClusters) {
+    }
+
+    private record VitalSigns(int heartRate, int systolicPressure) {
     }
 }

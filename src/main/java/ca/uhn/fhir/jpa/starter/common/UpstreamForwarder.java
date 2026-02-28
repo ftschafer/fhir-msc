@@ -44,9 +44,9 @@ public class UpstreamForwarder {
         this.client.registerInterceptor(new SimpleRequestHeaderInterceptor("X-Internal-Request", "true"));
     }
 
-    public void createObservations(List<Observation> observations) {
-        if (observations == null || observations.isEmpty()) return;
-        if (isUpstreamSuppressed("observations")) return;
+    public boolean createObservations(List<Observation> observations) {
+        if (observations == null || observations.isEmpty()) return true;
+        if (isUpstreamSuppressed("observations")) return false;
         try {
             Bundle tx = new Bundle().setType(Bundle.BundleType.TRANSACTION);
             for (Observation o : observations) {
@@ -91,11 +91,15 @@ public class UpstreamForwarder {
                     .setUrl(conditionalUrl);
             }
             client.transaction().withBundle(tx).execute();
+            return true;
         } catch (BaseServerResponseException e) {
             maybeSuppressUpstream(e, "observations");
             ourLog.error("ERROR forwarding observations: {}", e.getMessage());
+            return false;
         } catch (Exception e) {
+            maybeSuppressOnConnectivityFailure(e, "observations");
             ourLog.error("ERROR forwarding observations", e);
+            return false;
         }
     }
 
