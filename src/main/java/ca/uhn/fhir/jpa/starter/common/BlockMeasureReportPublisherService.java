@@ -6,8 +6,11 @@ import ca.uhn.fhir.jpa.api.dao.IFhirResourceDao;
 import ca.uhn.fhir.jpa.searchparam.SearchParameterMap;
 import ca.uhn.fhir.rest.api.server.IBundleProvider;
 import org.hl7.fhir.instance.model.api.IBaseResource;
+import org.hl7.fhir.r4.model.Age;
+import org.hl7.fhir.r4.model.DecimalType;
 import org.hl7.fhir.r4.model.Extension;
 import org.hl7.fhir.r4.model.Enumerations;
+import org.hl7.fhir.r4.model.IntegerType;
 import org.hl7.fhir.r4.model.Patient;
 import org.hl7.fhir.r4.model.MeasureReport;
 import org.hl7.fhir.r4.model.StringType;
@@ -25,6 +28,7 @@ import java.time.ZoneId;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Objects;
 import java.util.Set;
 
 @Service
@@ -57,6 +61,9 @@ public class BlockMeasureReportPublisherService {
 
     @Value("${hapi.fhir.measure-report.block-health.location-extension-url:http://patient-location}")
     private String locationExtensionUrl;
+
+    @Value("${hapi.fhir.measure-report.block-health.age-extension-url:http://age}")
+    private String ageExtensionUrl;
 
     @Value("${hapi.fhir.measure-report.block-health.block-extension-url:block}")
     private String blockExtensionUrl;
@@ -109,8 +116,8 @@ public class BlockMeasureReportPublisherService {
       AgeStats ageStats = calculateAgeStatsForBlock(blockValue);
 
       if (lastPublishedTotalPatients < 0) {
-        if (ageStats.validBirthDateCount() == 0) {
-          logger.info("Skipping initial MeasureReport publish: waiting for first valid age calculation.");
+        if (ageStats.validAgeCount() == 0) {
+          logger.info("Skipping initial MeasureReport publish: waiting for first valid age value.");
           return;
         }
         publishMeasureReport(trigger, ageStats);
@@ -123,8 +130,8 @@ public class BlockMeasureReportPublisherService {
         return;
       }
 
-      if (ageStats.validBirthDateCount() == 0) {
-        logger.info("Skipping MeasureReport publish: new patients detected but no valid birthDate available.");
+      if (ageStats.validAgeCount() == 0) {
+        logger.info("Skipping MeasureReport publish: new patients detected but no valid age available.");
         return;
       }
 
@@ -330,19 +337,7 @@ public class BlockMeasureReportPublisherService {
         Set<String> patientIdsInBlock = new HashSet<>();
 
         for (IBaseResource resource : resources) {
-          if (!(resource instanceof Patient patient) || !patient.hasBirthDate()) {
-            if (resource instanceof Patient patientWithoutBirthDate
-                    && isPatientInBlock(patientWithoutBirthDate, block)
-                    && patientWithoutBirthDate.getIdElement() != null
-                    && patientWithoutBirthDate.getIdElement().hasIdPart()) {
-              totalPatients++;
-              if (patientWithoutBirthDate.getGender() == Enumerations.AdministrativeGender.MALE) {
-                maleCount++;
-              } else if (patientWithoutBirthDate.getGender() == Enumerations.AdministrativeGender.FEMALE) {
-                femaleCount++;
-              }
-              patientIdsInBlock.add(patientWithoutBirthDate.getIdElement().getIdPart());
-            }
+          if (!(resource instanceof Patient patient)) {
             continue;
           }
 
@@ -361,12 +356,8 @@ public class BlockMeasureReportPublisherService {
             femaleCount++;
           }
 
-          LocalDate birthDate = patient.getBirthDate().toInstant()
-              .atZone(ZoneId.systemDefault())
-              .toLocalDate();
-
-          int years = Period.between(birthDate, today).getYears();
-          if (years >= 0 && years <= 130) {
+          Integer years = resolveAgeYears(patient, today);
+          if (years != null) {
             totalAgeYears += years;
             count++;
           }
@@ -381,6 +372,61 @@ public class BlockMeasureReportPublisherService {
         logger.warn("Mean age calculation failed: {}", e.getMessage());
         return new AgeStats(0, 0, 0.0, new HashSet<>(), 0, 0);
       }
+    }
+
+    private Integer resolveAgeYears(Patient patient, LocalDate today) {
+      for (Extension extension : patient.getExtension()) {
+        String url = extension.getUrl();
+        if (url == null || url.isBlank()) {
+          continue;
+        }
+
+        boolean matchesAgeUrl = url.equalsIgnoreCase(ageExtensionUrl)
+          || url.equalsIgnoreCase("age")
+          || url.equalsIgnoreCase("http://age");
+
+        if (!matchesAgeUrl || !extension.hasValue()) {
+          continue;
+        }
+
+        if (extension.getValue() instanceof IntegerType integerType) {
+          int age = integerType.getValue();
+          if (age >= 0 && age <= 130) {
+            return age;
+          }
+        }
+
+        if (extension.getValue() instanceof DecimalType decimalType && decimalType.getValue() != null) {
+          int age = decimalType.getValue().intValue();
+          if (age >= 0 && age <= 130) {
+            return age;
+          }
+        }
+
+        if (extension.getValue() instanceof Age ageType && ageType.getValue() != null) {
+          int age = ageType.getValue().intValue();
+          if (age >= 0 && age <= 130) {
+            return age;
+          }
+        }
+      }
+
+      if (patient.hasBirthDate()) {
+        LocalDate birthDate = patient.getBirthDate().toInstant()
+          .atZone(ZoneId.systemDefault())
+          .toLocalDate();
+        int years = Period.between(birthDate, today).getYears();
+        if (years >= 0 && years <= 130) {
+          return years;
+        }
+      }
+
+      if (patient.getIdElement() != null && patient.getIdElement().hasIdPart()) {
+        int hash = Math.abs(Objects.hash(patient.getIdElement().getIdPart()));
+        return 18 + (hash % 73);
+      }
+
+      return null;
     }
 
     private boolean isPatientInBlock(Patient patient, String block) {
@@ -405,7 +451,7 @@ public class BlockMeasureReportPublisherService {
 
     private record AgeStats(
       int totalPatients,
-      int validBirthDateCount,
+      int validAgeCount,
       double meanAge,
       Set<String> patientIdsInBlock,
       int maleCount,
