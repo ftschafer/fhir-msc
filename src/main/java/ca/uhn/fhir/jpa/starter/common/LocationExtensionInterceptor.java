@@ -1,16 +1,22 @@
 package ca.uhn.fhir.jpa.starter.common;
 
-import ca.uhn.fhir.interceptor.api.Hook;
-import ca.uhn.fhir.interceptor.api.Interceptor;
-import ca.uhn.fhir.interceptor.api.Pointcut;
 import org.hl7.fhir.instance.model.api.IBaseResource;
-import org.hl7.fhir.r4.model.*;
+import org.hl7.fhir.r4.model.Condition;
+import org.hl7.fhir.r4.model.Extension;
+import org.hl7.fhir.r4.model.MeasureReport;
+import org.hl7.fhir.r4.model.Observation;
+import org.hl7.fhir.r4.model.Patient;
+import org.hl7.fhir.r4.model.StringType;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
+import ca.uhn.fhir.interceptor.api.Hook;
+import ca.uhn.fhir.interceptor.api.Interceptor;
+import ca.uhn.fhir.interceptor.api.Pointcut;
+
 /**
  * Interceptor that automatically adds neighborhood extension to resources with block extension
- * Applies to: Patient, Observation, Condition
+ * Applies to: Patient, Observation, Condition, MeasureReport
  */
 @Component
 @Interceptor
@@ -34,12 +40,14 @@ public class LocationExtensionInterceptor {
     }
 
     private void ensureNeighborhoodExtension(IBaseResource resource) {
-        if (resource instanceof Patient) {
-            ensureNeighborhoodForPatient((Patient) resource);
-        } else if (resource instanceof Observation) {
-            ensureNeighborhoodForObservation((Observation) resource);
-        } else if (resource instanceof Condition) {
-            ensureNeighborhoodForCondition((Condition) resource);
+        if (resource instanceof Patient patient) {
+            ensureNeighborhoodForPatient(patient);
+        } else if (resource instanceof Observation observation) {
+            ensureNeighborhoodForObservation(observation);
+        } else if (resource instanceof Condition condition) {
+            ensureNeighborhoodForCondition(condition);
+        } else if (resource instanceof MeasureReport measureReport) {
+            ensureNeighborhoodForMeasureReport(measureReport);
         }
     }
 
@@ -94,6 +102,30 @@ public class LocationExtensionInterceptor {
     private void ensureNeighborhoodForCondition(Condition condition) {
         Extension locExt = condition.getExtensionByUrl(LOCATION_EXTENSION_URL);
         
+        // If no location extension at all, skip
+        if (locExt == null) {
+            return;
+        }
+
+        // Check if has block
+        boolean hasBlock = locExt.getExtension().stream()
+            .anyMatch(e -> BLOCK_URL.equals(e.getUrl()) && e.getValue() != null);
+
+        // Check if has neighborhood
+        boolean hasNeighborhood = locExt.getExtension().stream()
+            .anyMatch(e -> NEIGH_URL.equals(e.getUrl()) && e.getValue() != null);
+
+        // If has block but no neighborhood, add it
+        if (hasBlock && !hasNeighborhood) {
+            locExt.addExtension(new Extension()
+                .setUrl(NEIGH_URL)
+                .setValue(new StringType(neighborhoodValue)));
+        }
+    }
+
+    private void ensureNeighborhoodForMeasureReport(MeasureReport report) {
+        Extension locExt = report.getExtensionByUrl(LOCATION_EXTENSION_URL);
+
         // If no location extension at all, skip
         if (locExt == null) {
             return;

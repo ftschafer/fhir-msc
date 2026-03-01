@@ -367,16 +367,25 @@
             }
             url += `${url.includes('?') && !url.endsWith('?') ? '&' : ''}_ts=${Date.now()}`;
             
-            fetch(url, { cache: 'no-store' })
+            const statsPromise = fetch(url, { cache: 'no-store' })
                 .then(response => {
                     if (!response.ok) {
                         throw new Error(`HTTP ${response.status}: ${response.statusText}`);
                     }
                     return response.json();
-                })
-                .then(data => {
+                });
+
+            const correlationPromise = fetch(`${BASE_URL}/analytics/block-correlations`, {
+                cache: 'no-store',
+                headers: { 'Accept': 'application/json' }
+            })
+                .then(response => response.ok ? response.json() : null)
+                .catch(() => null);
+
+            Promise.all([statsPromise, correlationPromise])
+                .then(([data, correlationData]) => {
                     appendVitalTrendPoints(data);
-                    renderDashboard(data);
+                    renderDashboard(data, correlationData);
                     isLoadingDashboard = false;
                 })
                 .catch(error => {
@@ -391,7 +400,7 @@
                 });
         }
         
-        function renderDashboard(data) {
+        function renderDashboard(data, correlationData = null) {
             const content = document.getElementById('content');
             
             let html = '';
@@ -409,6 +418,8 @@
                 </div>
             `;
             html += '</div>';
+
+            html += renderCorrelationSection(correlationData);
             
             // Neighborhood stats section
             if (data.neighborhoodStats && data.neighborhoodStats.length > 0) {
@@ -521,6 +532,112 @@
             }
             
             content.innerHTML = html;
+        }
+
+        function renderCorrelationSection(correlationData) {
+            let html = '<h2 style="color: white; margin: 30px 0 12px 0;">Block Correlations</h2>';
+
+            if (!correlationData || !Array.isArray(correlationData.correlations) || correlationData.correlations.length === 0) {
+                html += '<div class="block-card" style="margin-bottom: 16px;">No correlation data available yet.</div>';
+                return html;
+            }
+
+            const correlations = correlationData.correlations;
+            const validCount = correlations.filter(item => {
+                const p = Number(item.pearson);
+                const s = Number(item.spearman);
+                return Number.isFinite(s) || Number.isFinite(p);
+            }).length;
+            const undefinedCount = correlations.length - validCount;
+
+            html += '<div class="block-card" style="margin-bottom: 16px;">';
+            html += `<div style="font-size:0.9em; color:#555; margin-bottom:10px;">Neighborhood: ${escapeHtml(correlationData.neighborhood || '')} · Blocks: ${Number(correlationData.blockCount || 0)}</div>`;
+            html += `
+                <div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:12px; font-size:0.82em;">
+                    <span style="background:#eef2ff; color:#334; border:1px solid #dbe2ff; border-radius:999px; padding:4px 10px;">Correlations: ${correlations.length}</span>
+                    <span style="background:#ecfdf5; color:#14532d; border:1px solid #bbf7d0; border-radius:999px; padding:4px 10px;">Computed: ${validCount}</span>
+                    <span style="background:#fff7ed; color:#9a3412; border:1px solid #fed7aa; border-radius:999px; padding:4px 10px;">Undefined: ${undefinedCount}</span>
+                </div>
+                <div style="font-size:0.8em; color:#666; margin-bottom:10px;">Bar direction: right = positive, left = negative · Bar size uses Spearman (ρ) when available.</div>
+            `;
+
+            correlations.forEach(item => {
+                const pearson = Number(item.pearson);
+                const spearman = Number(item.spearman);
+                const kendallTau = Number(item.kendallTau);
+                const signal = Number.isFinite(spearman) ? spearman : pearson;
+                const hasValue = Number.isFinite(signal);
+                const barWidth = hasValue ? (Math.min(1, Math.abs(signal)) * 50) : 0;
+                const left = hasValue ? (signal >= 0 ? 50 : 50 - barWidth) : 50;
+                const barColor = signal >= 0 ? '#667eea' : '#f093fb';
+                const confidence = String(item.confidence || 'low').toUpperCase();
+                const strength = hasValue ? correlationStrength(Math.abs(signal)) : 'NOT COMPUTABLE';
+                const direction = hasValue ? (signal >= 0 ? 'POSITIVE' : 'NEGATIVE') : 'NO VARIANCE';
+
+                html += `
+                    <div style="margin-bottom:12px; padding-bottom:10px; border-bottom:1px solid #f0f0f0;">
+                        <div style="display:flex; justify-content:space-between; gap:8px; font-size:0.9em; margin-bottom:6px;">
+                            <span style="color:#333; font-weight:600;">${escapeHtml(friendlyCorrelationLabel(item.label || ''))}</span>
+                            <span style="color:#666;">n=${Number(item.samples || 0)} · ${hasValue ? `ρ=${Number.isFinite(spearman) ? spearman.toFixed(3) : 'NA'} · τ=${Number.isFinite(kendallTau) ? kendallTau.toFixed(3) : 'NA'} · r=${Number.isFinite(pearson) ? pearson.toFixed(3) : 'NA'}` : 'insufficient'} · ${confidence}</span>
+                        </div>
+                        <div style="position:relative; height:14px; border-radius:7px; background:#edf0ff; overflow:hidden;">
+                            <div style="position:absolute; left:50%; top:0; bottom:0; width:1px; background:#c5cff8;"></div>
+                            ${hasValue ? `<div style="position:absolute; top:0; bottom:0; left:${left}%; width:${barWidth}%; background:${barColor};"></div>` : ''}
+                        </div>
+                        <div style="margin-top:6px; font-size:0.8em; color:#555; display:flex; justify-content:space-between; gap:8px;">
+                            <span>Interpretation: ${direction} · ${strength}</span>
+                            <span>${item.note ? escapeHtml(item.note) : ''}</span>
+                        </div>
+                    </div>
+                `;
+            });
+
+            html += '</div>';
+
+            if (Array.isArray(correlationData.blockRows) && correlationData.blockRows.length > 0) {
+                html += '<div class="block-card" style="margin-bottom: 16px; overflow:auto;">';
+                html += '<div style="font-size:0.92em; color:#333; font-weight:600; margin-bottom:8px;">Correlation Inputs by Block</div>';
+                html += '<table style="width:100%; border-collapse:collapse; font-size:0.82em;">';
+                html += '<thead><tr style="background:#f8faff; color:#444; text-align:left;"><th style="padding:6px; border-bottom:1px solid #e6ebff;">Block</th><th style="padding:6px; border-bottom:1px solid #e6ebff;">Income</th><th style="padding:6px; border-bottom:1px solid #e6ebff;">Care Units</th><th style="padding:6px; border-bottom:1px solid #e6ebff;">Mean Age</th><th style="padding:6px; border-bottom:1px solid #e6ebff;">NEWS2</th><th style="padding:6px; border-bottom:1px solid #e6ebff;">Conditions</th><th style="padding:6px; border-bottom:1px solid #e6ebff;">HR</th><th style="padding:6px; border-bottom:1px solid #e6ebff;">SBP</th><th style="padding:6px; border-bottom:1px solid #e6ebff;">DBP</th></tr></thead>';
+                html += '<tbody>';
+                correlationData.blockRows.forEach(row => {
+                    html += `<tr>
+                        <td style="padding:6px; border-bottom:1px solid #f1f3ff; font-weight:600;">${escapeHtml(row.block)}</td>
+                        <td style="padding:6px; border-bottom:1px solid #f1f3ff;">${formatMaybeNumber(row.averageIncome, 2)}</td>
+                        <td style="padding:6px; border-bottom:1px solid #f1f3ff;">${formatMaybeNumber(row.careUnits, 2)}</td>
+                        <td style="padding:6px; border-bottom:1px solid #f1f3ff;">${formatMaybeNumber(row.meanAge, 2)}</td>
+                        <td style="padding:6px; border-bottom:1px solid #f1f3ff;">${formatMaybeNumber(row.avgNews2, 2)}</td>
+                        <td style="padding:6px; border-bottom:1px solid #f1f3ff;">${formatMaybeNumber(row.conditionCount, 0)}</td>
+                        <td style="padding:6px; border-bottom:1px solid #f1f3ff;">${formatMaybeNumber(row.heartRate, 2)}</td>
+                        <td style="padding:6px; border-bottom:1px solid #f1f3ff;">${formatMaybeNumber(row.systolicBP, 2)}</td>
+                        <td style="padding:6px; border-bottom:1px solid #f1f3ff;">${formatMaybeNumber(row.diastolicBP, 2)}</td>
+                    </tr>`;
+                });
+                html += '</tbody></table></div>';
+            }
+
+            return html;
+        }
+
+        function friendlyCorrelationLabel(label) {
+            return String(label || '')
+                .replaceAll('_vs_', ' vs ')
+                .replaceAll('_', ' ')
+                .replace(/\b\w/g, c => c.toUpperCase());
+        }
+
+        function correlationStrength(absValue) {
+            if (!Number.isFinite(absValue)) return 'NOT COMPUTABLE';
+            if (absValue >= 0.7) return 'STRONG';
+            if (absValue >= 0.4) return 'MODERATE';
+            if (absValue > 0) return 'WEAK';
+            return 'NONE';
+        }
+
+        function formatMaybeNumber(value, digits = 2) {
+            const n = Number(value);
+            if (!Number.isFinite(n)) return '-';
+            return n.toFixed(digits);
         }
 
         function makeTrendKey(neighborhood, vitalSign) {
@@ -665,7 +782,7 @@
                 '"': '&quot;',
                 "'": '&#039;'
             };
-            return text.replace(/[&<>"']/g, m => map[m]);
+            return String(text ?? '').replace(/[&<>"']/g, m => map[m]);
         }
         
         // Load dashboard on page load and keep refreshing every 5 seconds
