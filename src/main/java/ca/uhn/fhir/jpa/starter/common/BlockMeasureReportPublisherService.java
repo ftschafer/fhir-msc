@@ -22,6 +22,8 @@ import org.springframework.context.event.EventListener;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
+import java.util.concurrent.TimeUnit;
+
 import java.time.LocalDate;
 import java.time.Period;
 import java.time.ZoneId;
@@ -107,9 +109,9 @@ public class BlockMeasureReportPublisherService {
       publishIfEligible("startup");
     }
 
-    @Scheduled(fixedDelay = 5, initialDelay = 5)
-    public void publishEveryFiveMinutes() {
-      publishIfEligible("scheduled-5min");
+    @Scheduled(fixedDelay = 15, initialDelay = 15, timeUnit = TimeUnit.SECONDS)
+    public void publishEveryFifteenSeconds() {
+      publishIfEligible("scheduled-15s");
     }
 
     private synchronized void publishIfEligible(String trigger) {
