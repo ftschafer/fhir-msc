@@ -148,12 +148,11 @@ public class DashboardProvider implements IResourceProvider {
             bs.totalScore += score;
 
             String neighborhood = blockNeighborhoodMap.get(blockName);
-            bs.city = neighborhood != null ? neighborhood : "";
-            bs.region = "";
+            bs.neighborhood = neighborhood != null ? neighborhood : "";
 
             totalPatients += 1;
 
-            String neighborhoodKey = bs.city == null ? "" : bs.city;
+            String neighborhoodKey = bs.neighborhood == null ? "" : bs.neighborhood;
             NeighborhoodStats ns = neighborhoodStatsMap.computeIfAbsent(neighborhoodKey, k -> new NeighborhoodStats(k));
             ns.totalScore += score;
             ns.patientCount += 1;
@@ -229,7 +228,7 @@ public class DashboardProvider implements IResourceProvider {
                     }
                     bs.vitalSignAverages.add(vsa);
 
-                    String neighborhoodKey = bs.city == null ? "" : bs.city;
+                    String neighborhoodKey = bs.neighborhood == null ? "" : bs.neighborhood;
                     Map<String, VitalSignAccumulator> byVital = neighborhoodVitalMap
                         .computeIfAbsent(neighborhoodKey, k -> new HashMap<>());
                     String vitalKey = vsa.vitalSign == null ? "" : vsa.vitalSign;
@@ -271,7 +270,7 @@ public class DashboardProvider implements IResourceProvider {
                 if (blockStats.aggregateNews2 == null) {
                     continue;
                 }
-                if (!java.util.Objects.equals(blockStats.city, neighborhoodStats.neighborhood)) {
+                if (!java.util.Objects.equals(blockStats.neighborhood, neighborhoodStats.neighborhood)) {
                     continue;
                 }
                 int weight = blockStats.aggregateSampleCount != null && blockStats.aggregateSampleCount > 0
@@ -289,8 +288,102 @@ public class DashboardProvider implements IResourceProvider {
         stats.blockStats = new ArrayList<>(blockStatsMap.values());
         stats.neighborhoodStats = new ArrayList<>(neighborhoodStatsMap.values());
         stats.totalPatients = totalPatients;
-        
+
+        // ── Statistical Summarization: reuse the same blockStats the dashboard displays ─
+        String neighborhoodName = stats.neighborhoodStats.isEmpty() ? ""
+            : stats.neighborhoodStats.get(0).neighborhood;
+        stats.blockStatistics = computeStatsSummary(stats.blockStats, neighborhoodName);
+
         return stats;
+    }
+
+    // ── Statistical computation ─────────────────────────────────────────────
+
+    private static final double Z_THRESHOLD = 1.96;
+    private static final int BOOTSTRAP_N = 1000;
+
+    /**
+     * Compute mean, median, variance, stddev, incidence, prevalence, z-scores
+     * and 95 % bootstrap CI using the same aggregateNews2 values the cards show.
+     */
+    private StatsSummary computeStatsSummary(List<BlockStats> blocks, String neighborhoodLabel) {
+        // Filter to blocks that have an aggregate value (the same ones shown in the dashboard)
+        List<BlockStats> withAgg = blocks.stream()
+            .filter(b -> b.aggregateNews2 != null)
+            .collect(java.util.stream.Collectors.toList());
+
+        StatsSummary s = new StatsSummary();
+        s.neighborhood = neighborhoodLabel;
+        s.blockCount = withAgg.size();
+        if (withAgg.isEmpty()) return s;
+
+        // avg NEWS2 per block — from aggregateNews2, the same value the block cards display
+        double[] avgs = withAgg.stream()
+            .mapToDouble(b -> b.aggregateNews2)
+            .toArray();
+
+        // Mean
+        double sum = 0;
+        for (double v : avgs) sum += v;
+        s.mean = sum / avgs.length;
+
+        // Median
+        double[] sorted = avgs.clone();
+        java.util.Arrays.sort(sorted);
+        if (sorted.length % 2 == 0) {
+            s.median = (sorted[sorted.length / 2 - 1] + sorted[sorted.length / 2]) / 2.0;
+        } else {
+            s.median = sorted[sorted.length / 2];
+        }
+
+        // Variance (sample)
+        if (avgs.length > 1) {
+            double ss = 0;
+            for (double v : avgs) ss += (v - s.mean) * (v - s.mean);
+            s.variance = ss / (avgs.length - 1);
+        }
+        s.stdDev = Math.sqrt(s.variance);
+
+        // Incidence rate (fraction of blocks with score > 0)
+        long withScore = withAgg.stream().filter(b -> b.totalScore > 0).count();
+        s.incidenceRate = (double) withScore / withAgg.size();
+
+        // Prevalence rate (total score / total patients)
+        int totalPat = withAgg.stream().mapToInt(b -> b.patientCount).sum();
+        double totalScr = withAgg.stream().mapToDouble(b -> b.totalScore).sum();
+        s.prevalenceRate = totalPat == 0 ? 0 : totalScr / totalPat;
+
+        // Z-scores per block
+        for (int i = 0; i < withAgg.size(); i++) {
+            BlockStats bs = withAgg.get(i);
+            double avg = avgs[i];
+            double z = s.stdDev == 0 ? 0 : (avg - s.mean) / s.stdDev;
+            boolean abnormal = Math.abs(z) >= Z_THRESHOLD;
+            s.zScores.add(new BlockZScore(
+                bs.block,
+                neighborhoodLabel != null ? neighborhoodLabel : (bs.neighborhood != null ? bs.neighborhood : ""),
+                avg, bs.patientCount, z, abnormal));
+        }
+
+        // Bootstrap 95 % CI for the mean
+        if (avgs.length > 0) {
+            java.util.Random rng = new java.util.Random(42);
+            double[] means = new double[BOOTSTRAP_N];
+            for (int i = 0; i < BOOTSTRAP_N; i++) {
+                double bSum = 0;
+                for (int j = 0; j < avgs.length; j++) {
+                    bSum += avgs[rng.nextInt(avgs.length)];
+                }
+                means[i] = bSum / avgs.length;
+            }
+            java.util.Arrays.sort(means);
+            int lo = (int) Math.floor(0.025 * means.length);
+            int hi = Math.min((int) Math.floor(0.975 * means.length), means.length - 1);
+            s.ciLower = means[Math.max(0, lo)];
+            s.ciUpper = means[hi];
+        }
+
+        return s;
     }
     
     private String extractBlock(Patient patient) {
@@ -596,8 +689,7 @@ public class DashboardProvider implements IResourceProvider {
             if (i > 0) json.append(",");
             json.append("{");
             json.append("\"block\":\"").append(escapeJson(bs.block)).append("\",");
-            json.append("\"region\":\"").append(escapeJson(bs.region)).append("\",");
-            json.append("\"city\":\"").append(escapeJson(bs.city)).append("\",");
+            json.append("\"neighborhood\":\"").append(escapeJson(bs.neighborhood)).append("\",");
             json.append("\"patientCount\":").append(bs.patientCount).append(",");
             json.append("\"conditionCount\":").append(bs.conditionCount).append(",");
             double blockAvgNews2 = bs.aggregateNews2 != null ? bs.aggregateNews2 : 0d;
@@ -619,11 +711,46 @@ public class DashboardProvider implements IResourceProvider {
             
             json.append("}");
         }
-        json.append("]");
+        json.append("],");
+
+        // ── Statistical Summarization ───────────────────────────────────────
+        json.append("\"blockStatistics\":");
+        appendStatsSummaryJson(json, stats.blockStatistics);
         
         json.append("}");
         
         response.getWriter().write(json.toString());
+    }
+
+    /** Serializes a StatsSummary (with z-scores) to JSON */
+    private void appendStatsSummaryJson(StringBuilder json, StatsSummary s) {
+        if (s == null) { json.append("null"); return; }
+        json.append("{");
+        json.append("\"neighborhood\":\"").append(escapeJson(s.neighborhood)).append("\",");
+        json.append("\"blockCount\":").append(s.blockCount).append(",");
+        json.append("\"mean\":").append(String.format(Locale.US, "%.4f", s.mean)).append(",");
+        json.append("\"median\":").append(String.format(Locale.US, "%.4f", s.median)).append(",");
+        json.append("\"variance\":").append(String.format(Locale.US, "%.4f", s.variance)).append(",");
+        json.append("\"stdDev\":").append(String.format(Locale.US, "%.4f", s.stdDev)).append(",");
+        json.append("\"incidenceRate\":").append(String.format(Locale.US, "%.4f", s.incidenceRate)).append(",");
+        json.append("\"prevalenceRate\":").append(String.format(Locale.US, "%.4f", s.prevalenceRate)).append(",");
+        json.append("\"ciLower\":").append(String.format(Locale.US, "%.4f", s.ciLower)).append(",");
+        json.append("\"ciUpper\":").append(String.format(Locale.US, "%.4f", s.ciUpper)).append(",");
+        json.append("\"zScores\":[");
+        for (int i = 0; i < s.zScores.size(); i++) {
+            BlockZScore z = s.zScores.get(i);
+            if (i > 0) json.append(",");
+            json.append("{");
+            json.append("\"block\":\"").append(escapeJson(z.block)).append("\",");
+            json.append("\"neighborhood\":\"").append(escapeJson(z.neighborhood)).append("\",");
+            json.append("\"average\":").append(String.format(Locale.US, "%.4f", z.average)).append(",");
+            json.append("\"patients\":").append(z.patients).append(",");
+            json.append("\"zScore\":").append(String.format(Locale.US, "%.4f", z.zScore)).append(",");
+            json.append("\"abnormal\":").append(z.abnormal);
+            json.append("}");
+        }
+        json.append("]");
+        json.append("}");
     }
 
     private String escapeJson(String str) {
@@ -637,8 +764,7 @@ public class DashboardProvider implements IResourceProvider {
     // Data classes
     static class BlockStats {
         String block;
-        String region;
-        String city;
+        String neighborhood;
         int patientCount;
         double totalScore;
         Double aggregateNews2;
@@ -668,7 +794,44 @@ public class DashboardProvider implements IResourceProvider {
         int totalConditions;
         List<BlockStats> blockStats = new ArrayList<>();
         List<NeighborhoodStats> neighborhoodStats = new ArrayList<>();
+        StatsSummary blockStatistics;
     }
+
+    /** Per-block z-score row */
+    static class BlockZScore {
+        String block;
+        String neighborhood;
+        double average;
+        int patients;
+        double zScore;
+        boolean abnormal;
+
+        BlockZScore(String block, String neighborhood, double average, int patients, double zScore, boolean abnormal) {
+            this.block = block;
+            this.neighborhood = neighborhood;
+            this.average = average;
+            this.patients = patients;
+            this.zScore = zScore;
+            this.abnormal = abnormal;
+        }
+    }
+
+    /** Aggregated statistical summary for a set of blocks */
+    static class StatsSummary {
+        String neighborhood;
+        int blockCount;
+        double mean;
+        double median;
+        double variance;
+        double stdDev;
+        double incidenceRate;
+        double prevalenceRate;
+        double ciLower;
+        double ciUpper;
+        List<BlockZScore> zScores = new ArrayList<>();
+    }
+
+
     
     static class VitalSignAverage {
         String vitalSign;

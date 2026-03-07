@@ -47,12 +47,14 @@ public class NeighborhoodMeasureReportAggregationService {
     private static final String STRAT_SEASONALITY = "Seasonality";
 
     private final DaoRegistry daoRegistry;
+    private final UpstreamForwarder upstreamForwarder;
 
-    @org.springframework.beans.factory.annotation.Value("${location.neighborhood:center}")
+    @org.springframework.beans.factory.annotation.Value("${location.neighborhood}")
     private String defaultNeighborhood;
 
-    public NeighborhoodMeasureReportAggregationService(DaoRegistry daoRegistry) {
+    public NeighborhoodMeasureReportAggregationService(DaoRegistry daoRegistry, UpstreamForwarder upstreamForwarder) {
         this.daoRegistry = daoRegistry;
+        this.upstreamForwarder = upstreamForwarder;
     }
 
     @Scheduled(fixedDelayString = "${aggregation.neighborhood.measure-report.ms:5000}")
@@ -75,8 +77,21 @@ public class NeighborhoodMeasureReportAggregationService {
                 acc.accept(blockReport);
             }
 
+            List<MeasureReport> forwarded = new java.util.ArrayList<>();
             for (NeighborhoodAccumulator acc : byNeighborhood.values()) {
-                upsertNeighborhoodReport(dao, acc);
+                MeasureReport report = upsertNeighborhoodReport(dao, acc);
+                if (report != null) {
+                    forwarded.add(report);
+                }
+            }
+
+            // Forward to upstream after local persistence succeeds
+            if (!forwarded.isEmpty() && upstreamForwarder != null) {
+                try {
+                    upstreamForwarder.upsertMeasureReports(forwarded);
+                } catch (Exception ue) {
+                    ourLog.warn("Upstream MeasureReport forwarding failed (local copy is safe): {}", ue.getMessage());
+                }
             }
         } catch (Exception e) {
             ourLog.warn("Neighborhood MeasureReport aggregation failed: {}", e.getMessage(), e);
@@ -132,9 +147,9 @@ public class NeighborhoodMeasureReportAggregationService {
         return null;
     }
 
-    private void upsertNeighborhoodReport(IFhirResourceDao<MeasureReport> dao, NeighborhoodAccumulator acc) {
+    private MeasureReport upsertNeighborhoodReport(IFhirResourceDao<MeasureReport> dao, NeighborhoodAccumulator acc) {
         if (acc.blockCount == 0) {
-            return;
+            return null;
         }
 
         String idPart = "neighborhood-health-aggregation-" + slug(acc.neighborhood);
@@ -178,6 +193,7 @@ public class NeighborhoodMeasureReportAggregationService {
         } catch (Exception e) {
             dao.create(report);
         }
+        return report;
     }
 
     private void addNumericStratifier(

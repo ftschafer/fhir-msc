@@ -2,11 +2,15 @@ package ca.uhn.fhir.jpa.starter.common;
 
 import java.math.BigDecimal;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Random;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import org.hl7.fhir.instance.model.api.IBaseResource;
 import org.hl7.fhir.r4.model.Condition;
@@ -47,9 +51,13 @@ public class BlockCorrelationController {
     private static final String STRAT_CARE_UNITS = "Care Units";
     private static final String STRAT_MEAN_AGE = "Mean Age";
 
+    private static final int PERMUTATION_COUNT = 1000;
+    private static final long PERMUTATION_SEED = 42L;
+    private static final int MORAN_PERMUTATIONS = 999;
+
     private final DaoRegistry daoRegistry;
 
-    @org.springframework.beans.factory.annotation.Value("${location.neighborhood:center}")
+    @org.springframework.beans.factory.annotation.Value("${location.neighborhood}")
     private String configuredNeighborhood;
 
     public BlockCorrelationController(DaoRegistry daoRegistry) {
@@ -109,6 +117,273 @@ public class BlockCorrelationController {
         }
         out.put("blockRows", rows);
         return out;
+    }
+
+    // ── Moran's I — Spatial Autocorrelation ──────────────────────────────
+
+    @GetMapping("/spatial-autocorrelation")
+    @Transactional
+    public Map<String, Object> getSpatialAutocorrelation(
+        @RequestParam(value = "neighborhood", required = false) String neighborhoodParam
+    ) {
+        String neighborhoodFilter = normalize(neighborhoodParam);
+        if (neighborhoodFilter == null) {
+            neighborhoodFilter = normalize(configuredNeighborhood);
+        }
+
+        Map<String, BlockRow> byBlock = loadBlockRows(neighborhoodFilter);
+        if (byBlock.isEmpty()) {
+            Map<String, Object> out = new LinkedHashMap<>();
+            out.put("neighborhood", neighborhoodFilter);
+            out.put("blockCount", 0);
+            out.put("message", "No block-level data available for spatial analysis");
+            out.put("variables", List.of());
+            return out;
+        }
+
+        applyConditionCounts(byBlock);
+        applyBlockNews2(byBlock);
+        applyVitalSignAverages(byBlock);
+
+        List<String> blockOrder = new ArrayList<>(byBlock.keySet());
+        double[][] weights = buildSpatialWeights(blockOrder);
+
+        List<Map<String, Object>> variables = new ArrayList<>();
+        variables.add(moranResult("avgNews2", blockOrder, byBlock, b -> b.avgNews2, weights));
+        variables.add(moranResult("conditionCount", blockOrder, byBlock, b -> asDouble(b.conditionCount), weights));
+        variables.add(moranResult("heartRate", blockOrder, byBlock, b -> b.heartRate, weights));
+        variables.add(moranResult("systolicBP", blockOrder, byBlock, b -> b.systolicBp, weights));
+        variables.add(moranResult("diastolicBP", blockOrder, byBlock, b -> b.diastolicBp, weights));
+        variables.add(moranResult("averageIncome", blockOrder, byBlock, b -> b.averageIncome, weights));
+        variables.add(moranResult("careUnits", blockOrder, byBlock, b -> b.careUnits, weights));
+
+        boolean anyClustered = variables.stream()
+            .anyMatch(v -> "clustered".equals(v.get("pattern")));
+
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("neighborhood", neighborhoodFilter);
+        out.put("blockCount", byBlock.size());
+        out.put("weightMatrix", "row-standardized contiguity (numeric block adjacency, fallback: full connectivity)");
+        out.put("permutations", MORAN_PERMUTATIONS);
+        out.put("blockLevelInterventionJustified", anyClustered);
+        out.put("variables", variables);
+        return out;
+    }
+
+    /**
+     * Build a row-standardized spatial weight matrix.  Tries to parse a
+     * numeric suffix from each block identifier so that blocks whose numbers
+     * differ by 1 are considered contiguous neighbours.  When numeric parsing
+     * fails for any block, falls back to equal-weight (all blocks connected
+     * to all others).
+     */
+    private double[][] buildSpatialWeights(List<String> blockOrder) {
+        int n = blockOrder.size();
+        double[][] w = new double[n][n];
+
+        // Attempt to extract a numeric id from each block name
+        Pattern numPattern = Pattern.compile("(\\d+)");
+        int[] numericId = new int[n];
+        boolean numericOk = true;
+        for (int i = 0; i < n; i++) {
+            Matcher m = numPattern.matcher(blockOrder.get(i));
+            if (m.find()) {
+                numericId[i] = Integer.parseInt(m.group(1));
+            } else {
+                numericOk = false;
+                break;
+            }
+        }
+
+        if (numericOk) {
+            // Contiguity: neighbours if numeric ids differ by exactly 1
+            for (int i = 0; i < n; i++) {
+                for (int j = 0; j < n; j++) {
+                    if (i != j && Math.abs(numericId[i] - numericId[j]) == 1) {
+                        w[i][j] = 1.0;
+                    }
+                }
+            }
+            // Check if any block ended up isolated (no numeric neighbour)
+            boolean anyIsolated = false;
+            for (int i = 0; i < n; i++) {
+                double rowSum = 0;
+                for (int j = 0; j < n; j++) rowSum += w[i][j];
+                if (rowSum == 0) { anyIsolated = true; break; }
+            }
+            if (anyIsolated) {
+                // Fall back to full connectivity
+                for (int i = 0; i < n; i++)
+                    for (int j = 0; j < n; j++)
+                        w[i][j] = (i != j) ? 1.0 : 0.0;
+            }
+        } else {
+            // Full connectivity fallback
+            for (int i = 0; i < n; i++)
+                for (int j = 0; j < n; j++)
+                    w[i][j] = (i != j) ? 1.0 : 0.0;
+        }
+
+        // Row-standardize
+        for (int i = 0; i < n; i++) {
+            double rowSum = 0;
+            for (int j = 0; j < n; j++) rowSum += w[i][j];
+            if (rowSum > 0) {
+                for (int j = 0; j < n; j++) w[i][j] /= rowSum;
+            }
+        }
+        return w;
+    }
+
+    /**
+     * Compute Moran's I for a single variable across blocks, with a
+     * permutation-based pseudo p-value.
+     */
+    private Map<String, Object> moranResult(
+        String variableName,
+        List<String> blockOrder,
+        Map<String, BlockRow> byBlock,
+        ValueExtractor extractor,
+        double[][] weights
+    ) {
+        // Collect values aligned with blockOrder, skipping nulls
+        List<Double> values = new ArrayList<>();
+        List<String> usedBlocks = new ArrayList<>();
+        List<Integer> usedIndices = new ArrayList<>();
+        for (int i = 0; i < blockOrder.size(); i++) {
+            BlockRow row = byBlock.get(blockOrder.get(i));
+            Double v = extractor.get(row);
+            if (v != null && !v.isNaN()) {
+                values.add(v);
+                usedBlocks.add(blockOrder.get(i));
+                usedIndices.add(i);
+            }
+        }
+
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("variable", variableName);
+        out.put("blocksUsed", usedBlocks);
+        out.put("n", values.size());
+
+        if (values.size() < 3) {
+            out.put("status", "insufficient_data");
+            out.put("moranI", null);
+            out.put("expectedI", null);
+            out.put("pValue", null);
+            out.put("zScore", null);
+            out.put("pattern", "undetermined");
+            out.put("interpretation", "Need at least 3 blocks with data");
+            return out;
+        }
+
+        // Build sub-weight-matrix for the used indices
+        int n = values.size();
+        double[][] subW = new double[n][n];
+        for (int i = 0; i < n; i++)
+            for (int j = 0; j < n; j++)
+                subW[i][j] = weights[usedIndices.get(i)][usedIndices.get(j)];
+        // Re-row-standardize after subsetting
+        for (int i = 0; i < n; i++) {
+            double rowSum = 0;
+            for (int j = 0; j < n; j++) rowSum += subW[i][j];
+            if (rowSum > 0) {
+                for (int j = 0; j < n; j++) subW[i][j] /= rowSum;
+            }
+        }
+
+        double observedI = computeMoranI(values, subW);
+        double expectedI = -1.0 / (n - 1);
+
+        // Variance check
+        double mean = values.stream().mapToDouble(Double::doubleValue).average().orElse(0);
+        double ss = values.stream().mapToDouble(v -> (v - mean) * (v - mean)).sum();
+        if (ss == 0.0) {
+            out.put("status", "zero_variance");
+            out.put("moranI", null);
+            out.put("expectedI", expectedI);
+            out.put("pValue", null);
+            out.put("zScore", null);
+            out.put("pattern", "constant");
+            out.put("interpretation", "All blocks have the same value — no spatial pattern to detect");
+            return out;
+        }
+
+        // Permutation test
+        Random rng = new Random(PERMUTATION_SEED);
+        List<Double> shuffled = new ArrayList<>(values);
+        int exceedCount = 0;
+        double sumPermI = 0;
+        double sumPermI2 = 0;
+
+        for (int p = 0; p < MORAN_PERMUTATIONS; p++) {
+            Collections.shuffle(shuffled, rng);
+            double permI = computeMoranI(shuffled, subW);
+            sumPermI += permI;
+            sumPermI2 += permI * permI;
+            if (Math.abs(permI) >= Math.abs(observedI)) {
+                exceedCount++;
+            }
+        }
+
+        double pValue = (exceedCount + 1.0) / (MORAN_PERMUTATIONS + 1.0);
+        double permMean = sumPermI / MORAN_PERMUTATIONS;
+        double permVar = (sumPermI2 / MORAN_PERMUTATIONS) - (permMean * permMean);
+        Double zScore = permVar > 0 ? (observedI - permMean) / Math.sqrt(permVar) : null;
+
+        String pattern;
+        String interpretation;
+        if (pValue < 0.05 && observedI > expectedI) {
+            pattern = "clustered";
+            interpretation = "Significant positive spatial autocorrelation — similar values cluster together. Block-level intervention is justified.";
+        } else if (pValue < 0.05 && observedI < expectedI) {
+            pattern = "dispersed";
+            interpretation = "Significant negative spatial autocorrelation — neighbouring blocks tend to have dissimilar values.";
+        } else {
+            pattern = "random";
+            interpretation = "No significant spatial pattern detected — values appear spatially random across blocks.";
+        }
+
+        out.put("status", "ok");
+        out.put("moranI", Math.round(observedI * 10000.0) / 10000.0);
+        out.put("expectedI", Math.round(expectedI * 10000.0) / 10000.0);
+        out.put("pValue", Math.round(pValue * 10000.0) / 10000.0);
+        out.put("zScore", zScore != null ? Math.round(zScore * 1000.0) / 1000.0 : null);
+        out.put("significant", pValue < 0.05);
+        out.put("pattern", pattern);
+        out.put("interpretation", interpretation);
+        return out;
+    }
+
+    /**
+     * Global Moran's I statistic.
+     * <pre>
+     *   I = (n / W) * Σᵢ Σⱼ wᵢⱼ (xᵢ - x̄)(xⱼ - x̄)  /  Σᵢ (xᵢ - x̄)²
+     * </pre>
+     * where W = Σᵢ Σⱼ wᵢⱼ.
+     */
+    private double computeMoranI(List<Double> values, double[][] w) {
+        int n = values.size();
+        double mean = 0;
+        for (double v : values) mean += v;
+        mean /= n;
+
+        double numerator = 0;
+        double denominator = 0;
+        double totalW = 0;
+
+        for (int i = 0; i < n; i++) {
+            double di = values.get(i) - mean;
+            denominator += di * di;
+            for (int j = 0; j < n; j++) {
+                totalW += w[i][j];
+                numerator += w[i][j] * di * (values.get(j) - mean);
+            }
+        }
+
+        if (denominator == 0 || totalW == 0) {
+            return 0;
+        }
+        return (n / totalW) * (numerator / denominator);
     }
 
     private Map<String, BlockRow> loadBlockRows(String neighborhoodFilter) {
@@ -284,6 +559,10 @@ public class BlockCorrelationController {
             out.put("pearson", null);
             out.put("spearman", null);
             out.put("kendallTau", null);
+            out.put("pearsonPValue", null);
+            out.put("spearmanPValue", null);
+            out.put("kendallTauPValue", null);
+            out.put("permutationTest", null);
             out.put("confidence", "low");
             out.put("note", "Need at least 3 blocks with both variables populated");
             return out;
@@ -292,11 +571,23 @@ public class BlockCorrelationController {
         Double pearson = pearson(xs, ys);
         Double spearman = spearman(xs, ys);
         Double kendallTau = kendallTauB(xs, ys);
+
+        Double pearsonP = correlationPValue(pearson, xs.size());
+        Double spearmanP = correlationPValue(spearman, xs.size());
+        Double kendallP = kendallTauPValue(kendallTau, xs.size());
+        Map<String, Object> permutation = permutationTest(xs, ys);
+
         out.put("status", pearson == null ? "undefined" : "ok");
         out.put("pearson", pearson);
         out.put("spearman", spearman);
         out.put("kendallTau", kendallTau);
-        out.put("confidence", confidenceLabel(xs.size(), spearman, kendallTau));
+        out.put("pearsonPValue", pearsonP);
+        out.put("spearmanPValue", spearmanP);
+        out.put("kendallTauPValue", kendallP);
+        out.put("permutationTest", permutation);
+
+        Double bestPValue = smallestNonNull(pearsonP, spearmanP, kendallP);
+        out.put("confidence", confidenceLabel(xs.size(), spearman, kendallTau, bestPValue));
         if (pearson == null) {
             out.put("note", "One variable has zero variance across sampled blocks");
         }
@@ -385,7 +676,7 @@ public class BlockCorrelationController {
         return (concordant - discordant) / denominator;
     }
 
-    private String confidenceLabel(int samples, Double spearman, Double kendallTau) {
+    private String confidenceLabel(int samples, Double spearman, Double kendallTau, Double pValue) {
         if (samples < 4) {
             return "low";
         }
@@ -401,15 +692,238 @@ public class BlockCorrelationController {
             count++;
         }
         double avgSignal = count == 0 ? 0d : signal / count;
+        boolean significant = pValue != null && pValue < 0.05;
 
-        if (samples >= 8 && avgSignal >= 0.35d) {
+        if (samples >= 8 && avgSignal >= 0.35d && significant) {
             return "high";
         }
-        if (samples >= 5 && avgSignal >= 0.2d) {
+        if (samples >= 8 && avgSignal >= 0.35d) {
             return "medium";
+        }
+        if (samples >= 5 && avgSignal >= 0.2d && significant) {
+            return "medium";
+        }
+        if (samples >= 5 && avgSignal >= 0.2d) {
+            return "low-medium";
         }
         return "low";
     }
+
+    // ── Analytical p-values ──────────────────────────────────────────────
+
+    /**
+     * Two-tailed p-value for Pearson or Spearman r using the t-distribution.
+     * t = r * sqrt((n-2) / (1 - r²)), df = n - 2.
+     */
+    private Double correlationPValue(Double r, int n) {
+        if (r == null || n < 3) {
+            return null;
+        }
+        if (Math.abs(r) >= 1.0) {
+            return 0.0;
+        }
+        double t = r * Math.sqrt((n - 2.0) / (1.0 - r * r));
+        return tDistTwoTailP(t, n - 2);
+    }
+
+    /**
+     * Two-tailed p-value for Kendall's tau using a normal approximation.
+     * Variance = 2(2n+5) / (9n(n-1)), z = tau / sqrt(variance).
+     */
+    private Double kendallTauPValue(Double tau, int n) {
+        if (tau == null || n < 3) {
+            return null;
+        }
+        double variance = (2.0 * (2.0 * n + 5.0)) / (9.0 * n * (n - 1.0));
+        double z = tau / Math.sqrt(variance);
+        return 2.0 * normalCdfUpperTail(Math.abs(z));
+    }
+
+    /**
+     * Two-tailed p-value from Student's t distribution using the
+     * regularized incomplete beta function:
+     * p = I_{df/(df+t²)}(df/2, 1/2)
+     */
+    private Double tDistTwoTailP(double t, int df) {
+        if (df < 1) {
+            return null;
+        }
+        double x = df / (df + t * t);
+        double p = regularizedIncompleteBeta(df / 2.0, 0.5, x);
+        return Math.max(0.0, Math.min(1.0, p));
+    }
+
+    /**
+     * Upper tail probability of the standard normal distribution.
+     * Uses the Abramowitz & Stegun rational approximation (formula 26.2.17).
+     */
+    private double normalCdfUpperTail(double z) {
+        if (z < 0) {
+            return 1.0 - normalCdfUpperTail(-z);
+        }
+        double t = 1.0 / (1.0 + 0.2316419 * z);
+        double pdf = Math.exp(-z * z / 2.0) / Math.sqrt(2.0 * Math.PI);
+        double poly = t * (0.319381530
+            + t * (-0.356563782
+            + t * (1.781477937
+            + t * (-1.821255978
+            + t * 1.330274429))));
+        return Math.max(0.0, Math.min(1.0, pdf * poly));
+    }
+
+    // ── Regularized incomplete beta function (for t-distribution CDF) ───
+
+    private double regularizedIncompleteBeta(double a, double b, double x) {
+        if (x < 0.0 || x > 1.0) {
+            return Double.NaN;
+        }
+        if (x == 0.0) {
+            return 0.0;
+        }
+        if (x == 1.0) {
+            return 1.0;
+        }
+        double lnBeta = lnGamma(a) + lnGamma(b) - lnGamma(a + b);
+        double front = Math.exp(Math.log(x) * a + Math.log(1.0 - x) * b - lnBeta);
+        if (x < (a + 1.0) / (a + b + 2.0)) {
+            return front * betaContinuedFraction(a, b, x) / a;
+        } else {
+            return 1.0 - front * betaContinuedFraction(b, a, 1.0 - x) / b;
+        }
+    }
+
+    /** Lentz continued-fraction evaluation for the incomplete beta function. */
+    private double betaContinuedFraction(double a, double b, double x) {
+        int maxIter = 200;
+        double eps = 1e-14;
+        double qab = a + b;
+        double qap = a + 1.0;
+        double qam = a - 1.0;
+
+        double c = 1.0;
+        double d = 1.0 - qab * x / qap;
+        if (Math.abs(d) < 1e-30) {
+            d = 1e-30;
+        }
+        d = 1.0 / d;
+        double h = d;
+
+        for (int m = 1; m <= maxIter; m++) {
+            int m2 = 2 * m;
+            double aa = m * (b - m) * x / ((qam + m2) * (a + m2));
+            d = 1.0 + aa * d;
+            if (Math.abs(d) < 1e-30) {
+                d = 1e-30;
+            }
+            c = 1.0 + aa / c;
+            if (Math.abs(c) < 1e-30) {
+                c = 1e-30;
+            }
+            d = 1.0 / d;
+            h *= d * c;
+
+            aa = -(a + m) * (qab + m) * x / ((a + m2) * (qap + m2));
+            d = 1.0 + aa * d;
+            if (Math.abs(d) < 1e-30) {
+                d = 1e-30;
+            }
+            c = 1.0 + aa / c;
+            if (Math.abs(c) < 1e-30) {
+                c = 1e-30;
+            }
+            d = 1.0 / d;
+            double del = d * c;
+            h *= del;
+
+            if (Math.abs(del - 1.0) < eps) {
+                break;
+            }
+        }
+        return h;
+    }
+
+    /** Lanczos approximation for ln(Gamma(x)). */
+    private double lnGamma(double x) {
+        double[] coef = {
+            76.18009172947146, -86.50532032941677,
+            24.01409824083091, -1.231739572450155,
+            0.1208650973866179e-2, -0.5395239384953e-5
+        };
+        double y = x;
+        double tmp = x + 5.5;
+        tmp -= (x - 0.5) * Math.log(tmp);
+        double ser = 1.000000000190015;
+        for (double c : coef) {
+            y += 1.0;
+            ser += c / y;
+        }
+        return -tmp + Math.log(2.5066282746310005 * ser / x);
+    }
+
+    // ── Permutation test ────────────────────────────────────────────────
+
+    /**
+     * Permutation test for Pearson r.  Shuffles the y-values
+     * {@link #PERMUTATION_COUNT} times (deterministic seed) and reports
+     * how often |r_perm| >= |r_observed|.
+     */
+    private Map<String, Object> permutationTest(List<Double> xs, List<Double> ys) {
+        int n = xs.size();
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("permutations", PERMUTATION_COUNT);
+
+        if (n < 3) {
+            result.put("status", "insufficient_samples");
+            result.put("observedPearson", null);
+            result.put("pValue", null);
+            result.put("significant_005", false);
+            result.put("significant_001", false);
+            return result;
+        }
+
+        Double observedR = pearson(xs, ys);
+        if (observedR == null) {
+            result.put("status", "undefined_zero_variance");
+            result.put("observedPearson", null);
+            result.put("pValue", null);
+            result.put("significant_005", false);
+            result.put("significant_001", false);
+            return result;
+        }
+
+        double absObserved = Math.abs(observedR);
+        int exceedCount = 0;
+        Random rng = new Random(PERMUTATION_SEED);
+        List<Double> shuffled = new ArrayList<>(ys);
+
+        for (int p = 0; p < PERMUTATION_COUNT; p++) {
+            Collections.shuffle(shuffled, rng);
+            Double permR = pearson(xs, shuffled);
+            if (permR != null && Math.abs(permR) >= absObserved) {
+                exceedCount++;
+            }
+        }
+
+        double pValue = (exceedCount + 1.0) / (PERMUTATION_COUNT + 1.0);
+        result.put("status", "ok");
+        result.put("observedPearson", observedR);
+        result.put("pValue", Math.round(pValue * 10000.0) / 10000.0);
+        result.put("significant_005", pValue < 0.05);
+        result.put("significant_001", pValue < 0.01);
+        return result;
+    }
+
+    private Double smallestNonNull(Double... values) {
+        Double min = null;
+        for (Double v : values) {
+            if (v != null && (min == null || v < min)) {
+                min = v;
+            }
+        }
+        return min;
+    }
+
+    // ── Core correlation coefficients ───────────────────────────────────
 
     private Double pearson(List<Double> xs, List<Double> ys) {
         int n = xs.size();

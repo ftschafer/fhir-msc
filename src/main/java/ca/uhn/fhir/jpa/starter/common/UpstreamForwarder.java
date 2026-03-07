@@ -9,6 +9,7 @@ import org.hl7.fhir.r4.model.Bundle;
 import org.hl7.fhir.r4.model.Condition;
 import org.hl7.fhir.r4.model.DomainResource;
 import org.hl7.fhir.r4.model.Extension;
+import org.hl7.fhir.r4.model.MeasureReport;
 import org.hl7.fhir.r4.model.Observation;
 import org.hl7.fhir.r4.model.Patient;
 import org.hl7.fhir.r4.model.Reference;
@@ -30,7 +31,7 @@ public class UpstreamForwarder {
     private static final String LOCATION_EXTENSION_URL = "http://patient-location";
     private static final String NEIGHBORHOOD_EXTENSION_URL = "neighborhood";
 
-    @Value("${location.neighborhood:center}")
+    @Value("${location.neighborhood}")
     private String neighborhoodValue;
     
     private final IGenericClient client;
@@ -391,6 +392,46 @@ public class UpstreamForwarder {
         } catch (BaseServerResponseException e) {
             ourLog.error("ERROR forwarding conditions: {}", e.getMessage());
             throw new RuntimeException("Failed to forward conditions", e);
+        }
+    }
+
+    /**
+     * Forward MeasureReport resources upstream using stable ID-based PUT.
+     * Used for neighborhood-level aggregated reports.
+     */
+    public void upsertMeasureReports(List<MeasureReport> reports) {
+        if (reports == null || reports.isEmpty()) return;
+        ourLog.debug("Forwarding {} MeasureReport(s) upstream", reports.size());
+        try {
+            Bundle tx = new Bundle().setType(Bundle.BundleType.TRANSACTION);
+            for (MeasureReport report : reports) {
+                MeasureReport copy = report.copy();
+                ensureNeighborhoodExtension(copy);
+
+                Bundle.BundleEntryComponent entry = tx.addEntry().setResource(copy);
+                String id = copy.getIdElement() != null ? copy.getIdElement().getIdPart() : null;
+                if (id != null && !id.isBlank()) {
+                    entry.getRequest()
+                        .setMethod(Bundle.HTTPVerb.PUT)
+                        .setUrl("MeasureReport/" + id);
+                } else if (copy.hasIdentifier()
+                        && copy.getIdentifierFirstRep().hasSystem()
+                        && copy.getIdentifierFirstRep().hasValue()) {
+                    entry.getRequest()
+                        .setMethod(Bundle.HTTPVerb.PUT)
+                        .setUrl("MeasureReport?identifier="
+                            + copy.getIdentifierFirstRep().getSystem() + "|"
+                            + copy.getIdentifierFirstRep().getValue());
+                } else {
+                    entry.getRequest()
+                        .setMethod(Bundle.HTTPVerb.POST)
+                        .setUrl("MeasureReport");
+                }
+            }
+            client.transaction().withBundle(tx).execute();
+            ourLog.info("Forwarded {} MeasureReport(s) upstream", reports.size());
+        } catch (BaseServerResponseException e) {
+            ourLog.error("ERROR forwarding MeasureReports upstream: {}", e.getMessage());
         }
     }
 
