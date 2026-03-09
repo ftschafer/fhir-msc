@@ -394,7 +394,7 @@
     <div class="container">
         <header>
             <h1>NEWS2 Neighborhood Dashboard</h1>
-            <p class="subtitle">Real-time health aggregation by neighborhood ┬À v2.1</p>
+            <p class="subtitle">Real-time health aggregation by neighborhood | v2.1</p>
         </header>
         
         <div class="controls">
@@ -703,13 +703,13 @@
                     <div style="margin-bottom:14px; padding-bottom:10px; border-bottom:1px solid #f0f0f0;">
                         <div style="display:flex; justify-content:space-between; align-items:center; gap:8px; font-size:0.9em; margin-bottom:8px;">
                             <span style="color:#333; font-weight:600;">${escapeHtml(friendlyCorrelationLabel(item.label || ''))}${sigBadge}</span>
-                            <span style="color:#666;">n=${Number(item.samples || 0)} ┬À ${confidence}</span>
+                            <span style="color:#666;">n=${Number(item.samples || 0)} | ${confidence}</span>
                         </div>
                         ${corrBar(pearson, 'r', pearsonP)}
                         ${corrBar(spearman, '\u03c1', spearmanP)}
                         ${corrBar(kendallTau, '\u03c4', kendallP)}
                         <div style="margin-top:6px; font-size:0.8em; color:#555; display:flex; justify-content:space-between; gap:8px;">
-                            <span>Interpretation: ${direction} ┬À ${strength}</span>
+                            <span>Interpretation: ${direction} | ${strength}</span>
                             <span>${item.note ? escapeHtml(item.note) : ''}</span>
                         </div>
                         ${perm && perm.pValue != null ? `

@@ -100,6 +100,12 @@ spring:
   ### elastic parameters ===> see also elasticsearch section below <===
 #      hibernate.search.backend.type: elasticsearch
 #      hibernate.search.backend.analysis.configurer: ca.uhn.fhir.jpa.search.HapiHSearchAnalysisConfigurers$HapiElasticAnalysisConfigurer
+
+aggregation:
+  patient:
+    fixed-delay-ms: 50
+  observation:
+    fixed-delay-ms: 50
 hapi:
   fhir:
     ### This flag when enabled to true, will avail evaluate measure operations from CR Module.
@@ -285,6 +291,8 @@ hapi:
       ### Request tenant mode can be used for a multi-tenancy setup where the request path is
       ###    expected to have an additional path element, e.g. GET http://example.com/fhir/TENANT-ID/Patient/A
     #  request_tenant_partitioning_mode: false
+    retain_cached_searches_mins: 60
+    reuse_cached_search_results_millis: 0
 
     cors:
       allow_Credentials: true
@@ -309,7 +317,7 @@ hapi:
     search_prefetch_thresholds: 13,503,2003,-1
 
     # comma-separated package names, will be @ComponentScan'ed by Spring to allow for creating custom Spring beans
-    #custom-bean-packages:
+    custom-bean-packages: ca.uhn.fhir.jpa.starter.common
     
     # comma-separated list of fully qualified interceptor classes. 
     # classes listed here will be fetched from the Spring context when combined with 'custom-bean-packages', 
