@@ -9,6 +9,7 @@ import jakarta.persistence.EntityManager;
 import jakarta.persistence.PersistenceContext;
 import jakarta.transaction.Transactional;
 import org.hl7.fhir.r4.model.*;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 import org.springframework.transaction.support.TransactionSynchronization;
@@ -49,8 +50,10 @@ public class CityNews2AggregationService {
     private static final String LOCATION_EXTENSION_URL = "http://patient-location";
     private static final String NEIGH_URL = "neighborhood";
     private static final String CITY_URL = "city";
-    private static final String CITY_VALUE = "NH";
     private static final String BLOCK_URL = "block";
+
+    @Value("${location.city}")
+    private String configuredCity;
 
     private final MeterRegistry meterRegistry;
 
@@ -181,7 +184,7 @@ public class CityNews2AggregationService {
             }
         }
 
-        city = normalize(city);
+        city = resolveConfiguredCity();
         neighborhood = normalize(neighborhood);
         block = normalize(block);
 
@@ -237,13 +240,27 @@ public class CityNews2AggregationService {
             patient.addExtension(locExt);
         }
 
-        boolean hasCity = locExt.getExtension().stream()
-                .anyMatch(e -> CITY_URL.equals(e.getUrl()) && e.getValue() != null);
+        String fixedCity = resolveConfiguredCity();
+        Extension cityExt = locExt.getExtension().stream()
+                .filter(e -> CITY_URL.equals(e.getUrl()))
+                .findFirst()
+                .orElse(null);
 
-        if (!hasCity) {
-            locExt.addExtension(new Extension()
-                    .setUrl(CITY_URL)
-                    .setValue(new StringType(CITY_VALUE)));
+        String currentCity = null;
+        if (cityExt != null && cityExt.getValue() != null) {
+            currentCity = normalize(cityExt.getValue().primitiveValue());
+        }
+
+        boolean needsUpdate = currentCity == null || !fixedCity.equalsIgnoreCase(currentCity);
+
+        if (needsUpdate) {
+            if (cityExt == null) {
+                locExt.addExtension(new Extension()
+                        .setUrl(CITY_URL)
+                        .setValue(new StringType(fixedCity)));
+            } else {
+                cityExt.setValue(new StringType(fixedCity));
+            }
 
             patientDao().update(patient);
 
@@ -339,5 +356,13 @@ public class CityNews2AggregationService {
              .replace('\u202F', ' ')
              .trim();
         return s.isEmpty() ? null : s;
+    }
+
+    private String resolveConfiguredCity() {
+        String city = normalize(configuredCity);
+        if (city == null) {
+            throw new IllegalStateException("Required property 'location.city' is missing or blank");
+        }
+        return city;
     }
 }

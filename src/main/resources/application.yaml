@@ -2,10 +2,14 @@
 server:
   #  servlet:
   #    context-path: /example/path
-  port: 8082
+  port: 8091
   tomcat:
     # allow | as a separator in the URL
     relaxed-query-chars: "|"
+
+location:
+  city: C91
+
 #Adds the option to go to e.g. http://localhost:8080/actuator/health for seeing the running configuration
 #see https://docs.spring.io/spring-boot/docs/current/reference/html/actuator.html#actuator.endpoints
 management:
@@ -169,7 +173,7 @@ hapi:
     #   use_apache_address_strategy_https: false
     ### enables the server to overwrite defaults on HTML, css, etc. under the url pattern of eg. /content/custom **
     ### Folder with custom content MUST be named custom. If omitted then default content applies
-    #custom_content_path: ./custom
+    custom_content_path: ./custom
     ### enables the server host custom content. If e.g. the value ./configs/app is supplied then the content
     ### will be served under /web/app
     #app_content_path: ./configs/app
@@ -315,7 +319,7 @@ hapi:
     # comma-separated list of fully qualified provider classes. 
     # classes listed here will be fetched from the Spring context when combined with 'custom-bean-packages', 
     # or will be instantiated via reflection using a no-arg constructor; then registered with the server
-    #custom-provider-classes:  
+    custom-provider-classes: ca.uhn.fhir.jpa.starter.common.DashboardProvider
     # specify what should be stored in meta.source based on StoreMetaSourceInformationEnum defaults to NONE
     # store_meta_source_information: NONE
     # Threadpool size for BATCH'ed GETs in a bundle.
@@ -399,5 +403,5 @@ hapi:
 #  username: SomeUsername
 upstream:
   fhir:
-    base-url: http://localhost:8082/fhir
+    base-url: http://localhost:9000/fhir
 

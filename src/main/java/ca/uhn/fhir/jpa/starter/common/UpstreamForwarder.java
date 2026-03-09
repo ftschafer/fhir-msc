@@ -1,15 +1,17 @@
 package ca.uhn.fhir.jpa.starter.common;
 
-import ca.uhn.fhir.context.FhirContext;
-import ca.uhn.fhir.rest.client.api.IGenericClient;
-import ca.uhn.fhir.rest.client.interceptor.SimpleRequestHeaderInterceptor;
+import java.util.List;
+
 import org.hl7.fhir.r4.model.Bundle;
+import org.hl7.fhir.r4.model.MeasureReport;
 import org.hl7.fhir.r4.model.Observation;
 import org.hl7.fhir.r4.model.Patient;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
-import java.util.List;
+import ca.uhn.fhir.context.FhirContext;
+import ca.uhn.fhir.rest.client.api.IGenericClient;
+import ca.uhn.fhir.rest.client.interceptor.SimpleRequestHeaderInterceptor;
 
 @Component
 public class UpstreamForwarder {
@@ -43,6 +45,20 @@ public class UpstreamForwarder {
                 String id = p.getIdElement().getIdPart();
                 e.getRequest().setMethod(Bundle.HTTPVerb.PUT)
                     .setUrl(id != null ? "Patient/" + id : "Patient");
+            }
+            client.transaction().withBundle(tx).execute();
+        } catch (Exception ignored) { }
+    }
+
+    public void upsertMeasureReports(List<MeasureReport> reports) {
+        if (reports == null || reports.isEmpty()) return;
+        try {
+            Bundle tx = new Bundle().setType(Bundle.BundleType.TRANSACTION);
+            for (MeasureReport r : reports) {
+                Bundle.BundleEntryComponent e = tx.addEntry().setResource(r);
+                String id = r.getIdElement().getIdPart();
+                e.getRequest().setMethod(Bundle.HTTPVerb.PUT)
+                    .setUrl(id != null ? "MeasureReport/" + id : "MeasureReport");
             }
             client.transaction().withBundle(tx).execute();
         } catch (Exception ignored) { }

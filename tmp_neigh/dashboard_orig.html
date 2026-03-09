@@ -1,0 +1,1457 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NEWS2 Neighborhood Aggregation Dashboard</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #dbeafe 0%, #e5e7eb 40%, #e5e7eb 100%);
+            min-height: 100vh;
+            padding: 24px;
+            color: #111827;
+        }
+        
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        
+        header {
+            text-align: center;
+            color: #111827;
+            margin-bottom: 32px;
+        }
+        
+        h1 {
+            font-size: 2.1em;
+            margin-bottom: 6px;
+            font-weight: 600;
+        }
+        
+        .subtitle {
+            font-size: 0.98em;
+            opacity: 0.85;
+            color: #4b5563;
+        }
+        
+        .controls {
+            background: #f9fafb;
+            padding: 18px 20px;
+            border-radius: 6px;
+            margin-bottom: 24px;
+            border: 1px solid #e5e7eb;
+        }
+        
+        .control-group {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+        }
+        
+        label {
+            font-weight: 500;
+            color: #111827;
+        }
+        
+        input[type="text"] {
+            padding: 8px 12px;
+            border: 1px solid #d1d5db;
+            border-radius: 4px;
+            font-size: 0.95em;
+            transition: border-color 0.2s, box-shadow 0.2s;
+        }
+        
+        input[type="text"]:focus {
+            outline: none;
+            border-color: #2563eb;
+            box-shadow: 0 0 0 1px #2563eb33;
+        }
+        
+        button {
+            padding: 8px 16px;
+            background: #2563eb;
+            color: #ffffff;
+            border: none;
+            border-radius: 4px;
+            font-size: 0.95em;
+            cursor: pointer;
+            transition: background 0.15s;
+        }
+        
+        button:hover {
+            background: #1d4ed8;
+        }
+        
+        button:active {
+            transform: translateY(0.5px);
+        }
+        
+        .summary {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+        
+        .summary-card {
+            background: #f9fafb;
+            padding: 18px 16px;
+            border-radius: 6px;
+            border: 1px solid #e5e7eb;
+            text-align: center;
+        }
+        
+        .summary-label {
+            color: #6b7280;
+            font-size: 0.82em;
+            margin-bottom: 10px;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+        }
+        
+        .summary-value {
+            font-size: 2.1em;
+            font-weight: 600;
+            color: #111827;
+        }
+        
+        .blocks-container {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+            gap: 20px;
+        }
+        
+        .block-card {
+            background: #f9fafb;
+            border-radius: 6px;
+            padding: 18px 16px;
+            border: 1px solid #e5e7eb;
+        }
+        
+        .block-header {
+            border-bottom: 1px solid #e5e7eb;
+            padding-bottom: 12px;
+            margin-bottom: 12px;
+        }
+        
+        .block-name {
+            font-size: 1.2em;
+            font-weight: 600;
+            color: #111827;
+            margin-bottom: 4px;
+        }
+        
+        .block-location {
+            font-size: 0.85em;
+            color: #6b7280;
+        }
+        
+        .block-stats {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 15px;
+        }
+        
+        .stat-item {
+            padding: 10px;
+            background: #f9fafb;
+            border-radius: 4px;
+        }
+        
+        .stat-label {
+            font-size: 0.8em;
+            color: #6b7280;
+            margin-bottom: 4px;
+        }
+        
+        .stat-value {
+            font-size: 1.4em;
+            font-weight: 600;
+            color: #111827;
+        }
+        
+        .stat-value.average {
+            color: #111827;
+        }
+        
+        .stat-value.patients {
+            color: #111827;
+        }
+        
+        .loading {
+            text-align: center;
+            color: #4b5563;
+            font-size: 1em;
+        }
+        
+        .error {
+            background: #f8d7da;
+            color: #721c24;
+            padding: 15px;
+            border-radius: 4px;
+            margin-bottom: 20px;
+            border: 1px solid #f5c6cb;
+        }
+        
+        .empty {
+            background: #f9fafb;
+            padding: 32px;
+            border-radius: 6px;
+            text-align: center;
+            color: #6b7280;
+            border: 1px solid #e5e7eb;
+        }
+
+        .auto-refresh-note {
+            margin-left: auto;
+            font-size: 0.82em;
+            color: #4b5563;
+            background: #e5e7eb;
+            border: 1px solid #d1d5db;
+            padding: 4px 10px;
+            border-radius: 999px;
+        }
+
+        .trend-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+            gap: 16px;
+            margin-top: 12px;
+        }
+
+        .trend-card {
+            background: #f9fafb;
+            border-radius: 6px;
+            padding: 14px;
+            border: 1px solid #e5e7eb;
+        }
+
+        .trend-title {
+            font-size: 0.9em;
+            font-weight: 600;
+            color: #111827;
+            margin-bottom: 4px;
+        }
+
+        .trend-subtitle {
+            font-size: 0.78em;
+            color: #6b7280;
+            margin-bottom: 8px;
+        }
+
+        .trend-current {
+            font-size: 1.02em;
+            color: #111827;
+            font-weight: 600;
+            margin-bottom: 8px;
+        }
+
+        .trend-svg {
+            width: 100%;
+            height: 120px;
+            display: block;
+            background: #f9fafb;
+            border: 1px solid #e5e7eb;
+            border-radius: 4px;
+        }
+
+        /* Statistical Summary styles */
+        .stats-section {
+            background: #f9fafb;
+            border-radius: 6px;
+            padding: 18px 16px;
+            margin-bottom: 20px;
+            border: 1px solid #e5e7eb;
+        }
+        .stats-section h3 {
+            font-size: 1em;
+            color: #111827;
+            margin-bottom: 10px;
+            padding-bottom: 6px;
+            border-bottom: 1px solid #e5e7eb;
+        }
+        .stats-grid {
+            display: flex;
+            flex-wrap: nowrap;
+            gap: 8px;
+            margin-bottom: 14px;
+        }
+        .stats-metric {
+            flex: 1 1 0;
+            min-width: 0;
+            background: #f9fafb;
+            border-radius: 4px;
+            padding: 8px 4px;
+            text-align: center;
+        }
+        .stats-metric .metric-label {
+            font-size: 0.7em;
+            color: #6b7280;
+            text-transform: uppercase;
+            letter-spacing: 0.3px;
+            margin-bottom: 3px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .stats-metric .metric-value {
+            font-size: 1.05em;
+            font-weight: 600;
+            color: #111827;
+            white-space: nowrap;
+        }
+        .chart-btn-group {
+            display: inline-flex;
+            gap: 0;
+            margin: 14px 0 6px 0;
+            border-radius: 999px;
+            overflow: hidden;
+            border: 1px solid #d1d5db;
+            background: #ffffff;
+        }
+        .stats-chart-toggle {
+            display: inline-block;
+            padding: 7px 16px;
+            background: #ffffff;
+            color: #4b5563;
+            border: none;
+            border-right: 1px solid #e5e7eb;
+            cursor: pointer;
+            font-size: 0.8em;
+            font-weight: 600;
+            letter-spacing: 0.2px;
+            transition: background 0.15s, color 0.15s;
+        }
+        .stats-chart-toggle:last-child { border-right: none; }
+        .stats-chart-toggle:hover { background: #f3f4f6; }
+        .stats-chart-toggle.active {
+            background: #111827;
+            color: #ffffff;
+        }
+        .stats-chart-container {
+            display: none;
+            margin-top: 14px;
+            background: #f9fafb;
+            border-radius: 6px;
+            border: 1px solid #e5e7eb;
+            padding: 18px 16px;
+        }
+        .stats-chart-container.visible { display: block; }
+        .chart-panel {
+            width: 100%;
+        }
+        .chart-panel canvas { max-width: 100%; height: auto; display: block; }
+        .z-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.82em;
+        }
+        .z-table th {
+            background: #f9fafb;
+            color: #374151;
+            text-align: left;
+            padding: 6px 8px;
+            border-bottom: 1px solid #e5e7eb;
+        }
+        .z-table td {
+            padding: 6px 8px;
+            border-bottom: 1px solid #e5e7eb;
+        }
+        .z-abnormal {
+            color: #dc2626;
+            font-weight: 600;
+        }
+        .z-normal {
+            color: #16a34a;
+        }
+        
+        @media (max-width: 768px) {
+            .block-stats {
+                grid-template-columns: 1fr;
+            }
+            
+            h1 {
+                font-size: 1.8em;
+            }
+            
+            .summary {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>NEWS2 Block Dashboard</h1>
+            <p class="subtitle">Real-time health aggregation by neighborhood ┬À v2.1</p>
+        </header>
+        
+        <div class="controls">
+            <div class="control-group">
+                <label for="blockFilter">Filter by Block:</label>
+                <input type="text" id="blockFilter" placeholder="e.g., Block-North-A (leave empty for all)">
+                <button onclick="loadDashboard()">Load</button>
+                <button onclick="exportPDF()" style="background:#4b5563;">Export PDF</button>
+                <span class="auto-refresh-note">Auto-refresh: every 5s</span>
+            </div>
+        </div>
+        
+        <div id="content"></div>
+    </div>
+    
+    <script>
+        const BASE_URL = window.location.origin;
+        const REFRESH_MS = 5000;
+        const TREND_WINDOW_MS = 60 * 60 * 1000;
+        const MAX_POINTS = 1000;
+        const TREND_STORAGE_KEY = 'news2-vital-trend-history-v1';
+
+        let autoRefreshHandle = null;
+        let isLoadingDashboard = false;
+        let lastDashboardData = null;
+        const vitalTrendHistory = new Map();
+
+        function saveTrendHistory() {
+            try {
+                const serialized = JSON.stringify(Array.from(vitalTrendHistory.entries()));
+                localStorage.setItem(TREND_STORAGE_KEY, serialized);
+            } catch (e) {
+                console.warn('Failed to persist trend history', e);
+            }
+        }
+
+        function loadTrendHistory() {
+            try {
+                const raw = localStorage.getItem(TREND_STORAGE_KEY);
+                if (!raw) return;
+                const entries = JSON.parse(raw);
+                if (!Array.isArray(entries)) return;
+
+                const nowTs = Date.now();
+                const minTs = nowTs - TREND_WINDOW_MS;
+
+                entries.forEach(entry => {
+                    if (!Array.isArray(entry) || entry.length !== 2) return;
+                    const key = entry[0];
+                    const series = entry[1];
+                    if (!series || !Array.isArray(series.points)) return;
+
+                    series.points = series.points
+                        .filter(p => p && Number.isFinite(p.ts) && Number.isFinite(Number(p.value)) && p.ts >= minTs)
+                        .slice(-MAX_POINTS);
+
+                    if (series.points.length > 0) {
+                        vitalTrendHistory.set(key, series);
+                    }
+                });
+            } catch (e) {
+                console.warn('Failed to load persisted trend history', e);
+            }
+        }
+        
+        function loadDashboard(showLoading = true) {
+            if (isLoadingDashboard) return;
+            isLoadingDashboard = true;
+
+            const blockFilter = document.getElementById('blockFilter').value.trim();
+            const content = document.getElementById('content');
+            
+            if (showLoading) {
+                content.innerHTML = '<div class="loading">Loading dashboard data...</div>';
+            }
+            
+            let url = `${BASE_URL}/fhir/Patient/$dashboard-stats`;
+            if (blockFilter) {
+                url += `?block=${encodeURIComponent(blockFilter)}`;
+            } else {
+                url += '?';
+            }
+            url += `${url.includes('?') && !url.endsWith('?') ? '&' : ''}_ts=${Date.now()}`;
+            
+            const statsPromise = fetch(url, { cache: 'no-store' })
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                    }
+                    return response.json();
+                });
+
+            const correlationPromise = fetch(`${BASE_URL}/analytics/block-correlations`, {
+                cache: 'no-store',
+                headers: { 'Accept': 'application/json' }
+            })
+                .then(response => response.ok ? response.json() : null)
+                .catch(() => null);
+
+            const moranPromise = fetch(`${BASE_URL}/analytics/spatial-autocorrelation`, {
+                cache: 'no-store',
+                headers: { 'Accept': 'application/json' }
+            })
+                .then(response => response.ok ? response.json() : null)
+                .catch(() => null);
+
+            Promise.all([statsPromise, correlationPromise, moranPromise])
+                .then(([data, correlationData, moranData]) => {
+                    lastDashboardData = data;
+                    appendVitalTrendPoints(data);
+                    renderDashboard(data, correlationData, moranData);
+                    isLoadingDashboard = false;
+                })
+                .catch(error => {
+                    console.error('Error loading dashboard:', error);
+                    isLoadingDashboard = false;
+                    content.innerHTML = `
+                        <div class="error">
+                            <strong>Error:</strong> ${error.message}<br>
+                            <small>Make sure the FHIR server is running and accessible at ${BASE_URL}/fhir</small>
+                        </div>
+                    `;
+                });
+        }
+        
+        function renderDashboard(data, correlationData = null, moranData = null) {
+            const content = document.getElementById('content');
+            
+            let html = '';
+            
+            // Summary cards
+            html += '<div class="summary">';
+            html += `
+                <div class="summary-card">
+                    <div class="summary-label">Total Patients</div>
+                    <div class="summary-value">${data.totalPatients}</div>
+                </div>
+                <div class="summary-card">
+                    <div class="summary-label">Total Conditions</div>
+                    <div class="summary-value">${data.totalConditions}</div>
+                </div>
+            `;
+            html += '</div>';
+
+            html += renderCorrelationSection(correlationData);
+
+            html += renderMoranSection(moranData);
+
+            // Statistical Summary
+            html += renderStatisticalSummary(data);
+            
+            // Neighborhood stats section
+            if (data.neighborhoodStats && data.neighborhoodStats.length > 0) {
+                html += '<h2 style="color:#111827; margin: 30px 0 16px 0;">Neighborhood Averages</h2>';
+                html += '<div class="summary">';
+                data.neighborhoodStats.forEach(ns => {
+                    html += '<div class="summary-card">';
+                    html += `
+                        <div class="summary-label">${escapeHtml(ns.neighborhood)}</div>
+                        <div class="summary-value">${ns.avgNews2.toFixed(1)}</div>
+                        <div class="summary-label" style="margin-top: 10px;">${ns.patientCount} patients</div>
+                    `;
+
+                    html += '</div>';
+                });
+                html += '</div>';
+
+                // Explicit neighborhood vital sign aggregation section
+                html += '<h2 style="color:#111827; margin: 30px 0 12px 0;">Neighborhood Vital Sign Aggregates</h2>';
+                data.neighborhoodStats.forEach(ns => {
+                    html += `
+                        <div class="block-card" style="margin-bottom: 14px;">
+                            <div class="block-header">
+                                <div class="block-name">${escapeHtml(ns.neighborhood)}</div>
+                                <div class="block-location">Aggregated from all blocks in this neighborhood</div>
+                            </div>
+                    `;
+
+                    if (ns.vitalSignAverages && ns.vitalSignAverages.length > 0) {
+                        html += '<div style="margin-top: 8px;">';
+                        ns.vitalSignAverages.forEach(vsa => {
+                            html += `
+                                <div style="display:flex; justify-content:space-between; padding:6px 0; border-bottom:1px solid #f0f0f0; font-size:0.92em;">
+                                    <span style="color:#555;">${escapeHtml(vsa.vitalSign)}</span>
+                                    <span style="font-weight:700; color:#667eea;">${vsa.averageValue.toFixed(2)} ${escapeHtml(vsa.unit || '')} <span style="color:#666; font-weight:500;">(n=${vsa.sampleCount || 0})</span></span>
+                                </div>
+                            `;
+                        });
+                        html += '</div>';
+                    } else {
+                        html += '<div style="padding:10px 0; color:#777;">No neighborhood vital-sign aggregates returned by API.</div>';
+                    }
+
+                    html += '</div>';
+                });
+
+                // Live trend graphs
+                html += '<h2 style="color:#111827; margin: 30px 0 12px 0;">Vital Sign Trends (Live)</h2>';
+                html += renderTrendCharts(data);
+            }
+            
+            // Block cards
+            if (data.blockStats && data.blockStats.length > 0) {
+                html += '<h2 style="color:#111827; margin: 30px 0 16px 0;">Block Details</h2>';
+                html += '<div class="blocks-container">';
+                
+                // Sort by block name
+                data.blockStats.sort((a, b) => a.block.localeCompare(b.block));
+                
+                data.blockStats.forEach(block => {
+                    const avgNews2 = block.avgNews2;
+                    
+                    html += `
+                        <div class="block-card">
+                            <div class="block-header">
+                                <div class="block-name">${escapeHtml(block.block)}</div>
+                                <div class="block-location">${escapeHtml(block.neighborhood)}</div>
+                            </div>
+                            <div class="block-stats">
+                                <div class="stat-item">
+                                    <div class="stat-label">Patients</div>
+                                    <div class="stat-value patients">${block.patientCount}</div>
+                                </div>
+                                <div class="stat-item">
+                                    <div class="stat-label">Conditions</div>
+                                    <div class="stat-value">${block.conditionCount}</div>
+                                </div>
+                                <div class="stat-item">
+                                    <div class="stat-label">Avg NEWS2</div>
+                                    <div class="stat-value average">${avgNews2.toFixed(1)}</div>
+                                </div>
+                                <div class="stat-item">
+                                    <div class="stat-label">Risk Level</div>
+                                    <div class="stat-value">${getRiskLevelBadge(parseFloat(avgNews2))}</div>
+                                </div>
+                            </div>
+                    `;
+                    
+                    // Add vital sign averages if available
+                    if (block.vitalSignAverages && block.vitalSignAverages.length > 0) {
+                        html += '<div style="margin-top: 15px; padding-top: 15px; border-top: 1px solid #e0e0e0;">';
+                        html += '<div style="font-size: 0.9em; color: #666; margin-bottom: 10px; font-weight: 500;">Vital Signs</div>';
+                        block.vitalSignAverages.forEach(vsa => {
+                            html += `
+                                <div style="display: flex; justify-content: space-between; padding: 5px 0; font-size: 0.85em;">
+                                    <span style="color: #666;">${escapeHtml(vsa.vitalSign)}</span>
+                                    <span style="font-weight: bold; color: #667eea;">${vsa.averageValue.toFixed(2)} ${escapeHtml(vsa.unit)}</span>
+                                </div>
+                            `;
+                        });
+                        html += '</div>';
+                    }
+                    
+                    html += '</div>'; // close block-card
+                });
+                
+                html += '</div>';
+            } else {
+                html += '<div class="empty">No block data available</div>';
+            }
+            
+            content.innerHTML = html;
+
+            // Restore chart visibility across refreshes
+            restoreVisibleCharts();
+        }
+
+        function renderCorrelationSection(correlationData) {
+            let html = '<h2 style="color:#111827; margin: 30px 0 12px 0;">Block Correlations</h2>';
+
+            if (!correlationData || !Array.isArray(correlationData.correlations) || correlationData.correlations.length === 0) {
+                const msg = correlationData && correlationData.message
+                    ? escapeHtml(correlationData.message)
+                    : 'No MeasureReport resources found. Upload block-level MeasureReports with stratifiers (Average Income, Care Units, Mean Age) to enable correlations.';
+                html += `<div class="block-card" style="margin-bottom: 16px;"><span style="color:#666;">${msg}</span></div>`;
+                return html;
+            }
+
+            const correlations = correlationData.correlations;
+            const validCount = correlations.filter(item => {
+                const p = Number(item.pearson);
+                const s = Number(item.spearman);
+                return Number.isFinite(s) || Number.isFinite(p);
+            }).length;
+            const undefinedCount = correlations.length - validCount;
+
+            html += '<div class="block-card" style="margin-bottom: 16px;">';
+            html += `<div style="font-size:0.9em; color:#555; margin-bottom:10px;">Neighborhood: ${escapeHtml(correlationData.neighborhood || '')} ┬À Blocks: ${Number(correlationData.blockCount || 0)}</div>`;
+            html += `
+                <div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:12px; font-size:0.82em;">
+                    <span style="background:#eef2ff; color:#334; border:1px solid #dbe2ff; border-radius:999px; padding:4px 10px;">Correlations: ${correlations.length}</span>
+                    <span style="background:#ecfdf5; color:#14532d; border:1px solid #bbf7d0; border-radius:999px; padding:4px 10px;">Computed: ${validCount}</span>
+                    <span style="background:#fff7ed; color:#9a3412; border:1px solid #fed7aa; border-radius:999px; padding:4px 10px;">Undefined: ${undefinedCount}</span>
+                </div>
+            `;
+
+            html += '<div style="font-size:0.8em; color:#666; margin-bottom:10px;">Three bars per correlation: Pearson r, Spearman \u03c1, Kendall \u03c4. Direction: right = positive, left = negative.</div>';
+
+            // Helper: render one diverging bar with label + p-value
+            function corrBar(value, label, pValue) {
+                const v = Number(value);
+                if (!Number.isFinite(v)) return `<div style="display:flex;align-items:center;gap:6px;margin-bottom:3px;"><span style="width:70px;text-align:right;font-size:0.78em;color:#6b7280;">${label}</span><span style="font-size:0.75em;color:#9ca3af;">N/A</span></div>`;
+                const w = Math.min(1, Math.abs(v)) * 50;
+                const l = v >= 0 ? 50 : 50 - w;
+                const col = v >= 0 ? '#1d4ed8' : '#b91c1c';
+                const pStr = pValue != null && Number.isFinite(Number(pValue)) ? ' p=' + formatPValue(pValue) : '';
+                return `<div style="display:flex;align-items:center;gap:6px;margin-bottom:3px;">
+                    <span style="width:70px;text-align:right;font-size:0.78em;color:#4b5563;">${label} ${v.toFixed(3)}</span>
+                    <div style="flex:1;position:relative;height:10px;border-radius:5px;background:#e5e7eb;overflow:hidden;">
+                        <div style="position:absolute;left:50%;top:0;bottom:0;width:1px;background:#9ca3af;"></div>
+                        <div style="position:absolute;top:0;bottom:0;left:${l}%;width:${w}%;background:${col};border-radius:5px;"></div>
+                    </div>
+                    <span style="font-size:0.72em;color:#6b7280;min-width:70px;">${pStr}</span>
+                </div>`;
+            }
+
+            correlations.forEach(item => {
+                const pearson = Number(item.pearson);
+                const spearman = Number(item.spearman);
+                const kendallTau = Number(item.kendallTau);
+                const pearsonP = item.pearsonPValue;
+                const spearmanP = item.spearmanPValue;
+                const kendallP = item.kendallTauPValue;
+                const perm = item.permutationTest;
+
+                const hasValue = Number.isFinite(spearman) || Number.isFinite(pearson);
+                const signal = Number.isFinite(spearman) ? spearman : Number.isFinite(pearson) ? pearson : null;
+                const confidence = String(item.confidence || 'low').toUpperCase();
+                const strength = hasValue ? correlationStrength(Math.abs(signal)) : 'NOT COMPUTABLE';
+                const direction = hasValue ? (signal >= 0 ? 'POSITIVE' : 'NEGATIVE') : 'NO VARIANCE';
+
+                // Determine best analytical p-value for the significance badge
+                const pVals = [pearsonP, spearmanP, kendallP].filter(v => v != null && Number.isFinite(Number(v)));
+                const bestP = pVals.length > 0 ? Math.min(...pVals) : null;
+                const sigBadge = bestP != null
+                    ? (bestP < 0.01 ? '<span style="background:#dcfce7;color:#166534;border:1px solid #86efac;border-radius:999px;padding:2px 8px;font-size:0.78em;margin-left:6px;">p&lt;0.01 **</span>'
+                     : bestP < 0.05 ? '<span style="background:#fef9c3;color:#854d0e;border:1px solid #fde68a;border-radius:999px;padding:2px 8px;font-size:0.78em;margin-left:6px;">p&lt;0.05 *</span>'
+                     : '<span style="background:#f3f4f6;color:#6b7280;border:1px solid #e5e7eb;border-radius:999px;padding:2px 8px;font-size:0.78em;margin-left:6px;">n.s.</span>')
+                    : '';
+
+                html += `
+                    <div style="margin-bottom:14px; padding-bottom:10px; border-bottom:1px solid #f0f0f0;">
+                        <div style="display:flex; justify-content:space-between; align-items:center; gap:8px; font-size:0.9em; margin-bottom:8px;">
+                            <span style="color:#333; font-weight:600;">${escapeHtml(friendlyCorrelationLabel(item.label || ''))}${sigBadge}</span>
+                            <span style="color:#666;">n=${Number(item.samples || 0)} ┬À ${confidence}</span>
+                        </div>
+                        ${corrBar(pearson, 'r', pearsonP)}
+                        ${corrBar(spearman, '\u03c1', spearmanP)}
+                        ${corrBar(kendallTau, '\u03c4', kendallP)}
+                        <div style="margin-top:6px; font-size:0.8em; color:#555; display:flex; justify-content:space-between; gap:8px;">
+                            <span>Interpretation: ${direction} ┬À ${strength}</span>
+                            <span>${item.note ? escapeHtml(item.note) : ''}</span>
+                        </div>
+                        ${perm && perm.pValue != null ? `
+                        <div style="margin-top:4px; font-size:0.75em; color:#555;">
+                            <span title="Permutation test (${perm.permutations || 1000} shuffles)" style="${perm.significant_005 ? 'color:#166534;font-weight:600;' : ''}">p<sub>perm</sub>=${formatPValue(perm.pValue)}${perm.significant_001 ? ' **' : perm.significant_005 ? ' *' : ''}</span>
+                        </div>
+                        ` : ''}
+                    </div>
+                `;
+            });
+
+            if (Array.isArray(correlationData.blockRows) && correlationData.blockRows.length > 0) {
+                html += '<div style="margin-top:14px; overflow:auto;">';
+                html += '<div style="font-size:0.92em; color:#333; font-weight:600; margin-bottom:8px;">Correlation Inputs by Block</div>';
+                html += '<table style="width:100%; border-collapse:collapse; font-size:0.82em;">';
+                html += '<thead><tr style="background:#f8faff; color:#444; text-align:left;"><th style="padding:6px; border-bottom:1px solid #e6ebff;">Block</th><th style="padding:6px; border-bottom:1px solid #e6ebff;">Income</th><th style="padding:6px; border-bottom:1px solid #e6ebff;">Care Units</th><th style="padding:6px; border-bottom:1px solid #e6ebff;">Mean Age</th><th style="padding:6px; border-bottom:1px solid #e6ebff;">NEWS2</th><th style="padding:6px; border-bottom:1px solid #e6ebff;">Conditions</th><th style="padding:6px; border-bottom:1px solid #e6ebff;">HR</th><th style="padding:6px; border-bottom:1px solid #e6ebff;">SBP</th><th style="padding:6px; border-bottom:1px solid #e6ebff;">DBP</th></tr></thead>';
+                html += '<tbody>';
+                correlationData.blockRows.forEach(row => {
+                    html += `<tr>
+                        <td style="padding:6px; border-bottom:1px solid #f1f3ff; font-weight:600;">${escapeHtml(row.block)}</td>
+                        <td style="padding:6px; border-bottom:1px solid #f1f3ff;">${formatMaybeNumber(row.averageIncome, 2)}</td>
+                        <td style="padding:6px; border-bottom:1px solid #f1f3ff;">${formatMaybeNumber(row.careUnits, 2)}</td>
+                        <td style="padding:6px; border-bottom:1px solid #f1f3ff;">${formatMaybeNumber(row.meanAge, 2)}</td>
+                        <td style="padding:6px; border-bottom:1px solid #f1f3ff;">${formatMaybeNumber(row.avgNews2, 2)}</td>
+                        <td style="padding:6px; border-bottom:1px solid #f1f3ff;">${formatMaybeNumber(row.conditionCount, 0)}</td>
+                        <td style="padding:6px; border-bottom:1px solid #f1f3ff;">${formatMaybeNumber(row.heartRate, 2)}</td>
+                        <td style="padding:6px; border-bottom:1px solid #f1f3ff;">${formatMaybeNumber(row.systolicBP, 2)}</td>
+                        <td style="padding:6px; border-bottom:1px solid #f1f3ff;">${formatMaybeNumber(row.diastolicBP, 2)}</td>
+                    </tr>`;
+                });
+                html += '</tbody></table></div>';
+            }
+
+            html += '</div>'; // close block-card
+
+            return html;
+        }
+
+        function friendlyCorrelationLabel(label) {
+            return String(label || '')
+                .replaceAll('_vs_', ' vs ')
+                .replaceAll('_', ' ')
+                .replace(/\b\w/g, c => c.toUpperCase());
+        }
+
+        function correlationStrength(absValue) {
+            if (!Number.isFinite(absValue)) return 'NOT COMPUTABLE';
+            if (absValue >= 0.7) return 'STRONG';
+            if (absValue >= 0.4) return 'MODERATE';
+            if (absValue > 0) return 'WEAK';
+            return 'NONE';
+        }
+
+        function formatPValue(p) {
+            if (p == null || !Number.isFinite(Number(p))) return 'NA';
+            const v = Number(p);
+            if (v < 0.001) return '<0.001';
+            return v.toFixed(4);
+        }
+
+        // ÔöÇÔöÇ MoranÔÇÖs I renderer ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
+        function renderMoranSection(moranData) {
+            let html = '<h2 style="color:#111827; margin: 30px 0 12px 0;">Spatial Autocorrelation (Moran\'s I)</h2>';
+
+            if (!moranData || !Array.isArray(moranData.variables) || moranData.variables.length === 0) {
+                const msg = moranData && moranData.message
+                    ? escapeHtml(moranData.message)
+                    : 'No spatial autocorrelation data available.';
+                html += `<div class="block-card" style="margin-bottom:16px;"><span style="color:#666;">${msg}</span></div>`;
+                return html;
+            }
+
+            const justified = moranData.blockLevelInterventionJustified;
+            html += '<div class="block-card" style="margin-bottom:16px;">';
+            html += `<div style="font-size:0.9em; color:#4b5563; margin-bottom:10px;">Neighborhood: ${escapeHtml(moranData.neighborhood || '')} \u00b7 Blocks: ${Number(moranData.blockCount || 0)} \u00b7 Permutations: ${moranData.permutations || 999}</div>`;
+
+            // Intervention justification banner
+            if (justified) {
+                html += '<div style="background:#e5f3ff; border:1px solid #bfdbfe; border-radius:6px; padding:10px 14px; margin-bottom:14px; font-size:0.88em; color:#1d4ed8;">';
+                html += '\u2714 Significant spatial clustering detected \u2014 <strong>block-level intervention is statistically justified</strong>.';
+                html += '</div>';
+            } else {
+                html += '<div style="background:#fef2f2; border:1px solid #fecaca; border-radius:6px; padding:10px 14px; margin-bottom:14px; font-size:0.88em; color:#b91c1c;">';
+                html += '\u26a0 No significant spatial clustering found. Block-level patterns may be random.';
+                html += '</div>';
+            }
+
+            html += '<div style="font-size:0.8em; color:#6b7280; margin-bottom:10px;">' +
+                'Moran\'s I ranges from \u22121 (perfect dispersion) through 0 (random) to +1 (perfect clustering). ' +
+                'Significance tested via permutation (p&lt;0.05).</div>';
+
+            moranData.variables.forEach(item => {
+                const I = item.moranI;
+                const eI = item.expectedI;
+                const hasValue = I != null && Number.isFinite(Number(I));
+                const pattern = String(item.pattern || 'undetermined').toUpperCase();
+
+                // Colour for the pattern badge (muted, technical)
+                let badgeBg, badgeFg, badgeBorder;
+                switch (item.pattern) {
+                    case 'clustered':  badgeBg = '#e5f3ff'; badgeFg = '#1d4ed8'; badgeBorder = '#bfdbfe'; break;
+                    case 'dispersed':  badgeBg = '#fef2f2'; badgeFg = '#b91c1c'; badgeBorder = '#fecaca'; break;
+                    case 'random':     badgeBg = '#f3f4f6'; badgeFg = '#4b5563'; badgeBorder = '#e5e7eb'; break;
+                    default:           badgeBg = '#fef3c7'; badgeFg = '#92400e'; badgeBorder = '#fde68a'; break;
+                }
+
+                // Bar: map I from [-1,+1] onto a diverging bar (center = 0)
+                const barVal = hasValue ? Math.max(-1, Math.min(1, Number(I))) : 0;
+                const barWidth = hasValue ? (Math.abs(barVal) * 50) : 0;
+                const barLeft = barVal >= 0 ? 50 : 50 - barWidth;
+                const barColor = barVal >= 0 ? '#1d4ed8' : '#b91c1c';
+
+                html += `
+                    <div style="margin-bottom:12px; padding-bottom:10px; border-bottom:1px solid #f0f0f0;">
+                        <div style="display:flex; justify-content:space-between; align-items:center; gap:8px; font-size:0.9em; margin-bottom:6px;">
+                            <span style="color:#333; font-weight:600;">${escapeHtml(friendlyCorrelationLabel(item.variable || ''))}
+                                <span style="background:${badgeBg};color:${badgeFg};border:1px solid ${badgeBorder};border-radius:999px;padding:2px 8px;font-size:0.78em;margin-left:6px;">${pattern}</span>
+                            </span>
+                            <span style="color:#666; font-size:0.85em;">n=${item.n || 0}${hasValue ? ` \u00b7 I=${Number(I).toFixed(4)} \u00b7 E[I]=${Number(eI).toFixed(4)}` : ''}</span>
+                        </div>
+                        <div style="position:relative; height:14px; border-radius:7px; background:#f3f4f6; overflow:hidden;">
+                            <div style="position:absolute; left:50%; top:0; bottom:0; width:1px; background:#d1d5db;"></div>
+                            ${hasValue ? `<div style="position:absolute; top:0; bottom:0; left:${barLeft}%; width:${barWidth}%; background:${barColor};"></div>` : ''}
+                        </div>
+                        <div style="margin-top:6px; display:flex; flex-wrap:wrap; gap:6px 14px; font-size:0.78em; color:#555;">
+                            ${item.pValue != null ? `<span>p=${formatPValue(item.pValue)}${item.significant ? ' *' : ''}</span>` : ''}
+                            ${item.zScore != null ? `<span>z=${Number(item.zScore).toFixed(3)}</span>` : ''}
+                        </div>
+                        <div style="margin-top:4px; font-size:0.78em; color:#666;">${escapeHtml(item.interpretation || '')}</div>
+                    </div>
+                `;
+            });
+
+            html += '</div>';
+            return html;
+        }
+
+        function formatMaybeNumber(value, digits = 2) {
+            const n = Number(value);
+            if (!Number.isFinite(n)) return '-';
+            return n.toFixed(digits);
+        }
+
+        // ÔöÇÔöÇ Statistical Summary renderer ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
+        // Only one chart visible at a time (radio behaviour)
+        let activeChart = null;
+
+        function renderStatisticalSummary(data) {
+            let html = '';
+            const s = data.blockStatistics;
+            if (!s) return html;
+
+            html += '<h2 style="color:#111827; margin: 30px 0 16px 0;">Statistical Summary</h2>';
+            html += '<div class="stats-section">';
+            html += `<h3>Neighborhood: ${escapeHtml(s.neighborhood || '?')} &mdash; ${s.blockCount} block(s)</h3>`;
+            html += renderStatsMetrics(s);
+            if (s.zScores && s.zScores.length > 0) {
+                html += renderZScoreTable(s.zScores);
+            }
+
+            // Collect available vital signs
+            const blocks = (data.blockStats || []).sort((a, b) => a.block.localeCompare(b.block));
+            const allVitals = new Map();
+            blocks.forEach(b => {
+                (b.vitalSignAverages || []).forEach(v => {
+                    if (!allVitals.has(v.vitalSign)) allVitals.set(v.vitalSign, v.unit || '');
+                });
+            });
+
+            // Segmented button group
+            html += '<div class="chart-btn-group">';
+            html += '<button class="stats-chart-toggle" data-chart="news2" onclick="toggleChart(this,\'news2\')">NEWS2</button>';
+            allVitals.forEach((unit, name) => {
+                const key = 'vital_' + name.replace(/\s+/g, '_');
+                html += `<button class="stats-chart-toggle" data-chart="${escapeHtml(key)}" onclick="toggleChart(this,'${escapeHtml(key)}')">${escapeHtml(name)}</button>`;
+            });
+            html += '</div>';
+
+            // NEWS2 chart container
+            html += '<div class="stats-chart-container" id="chart_news2"><div class="chart-panel">';
+            html += '<canvas id="canvas_news2"></canvas>';
+            html += '</div></div>';
+
+            // Vital sign chart containers
+            allVitals.forEach((unit, name) => {
+                const key = 'vital_' + name.replace(/\s+/g, '_');
+                html += `<div class="stats-chart-container" id="chart_${escapeHtml(key)}"><div class="chart-panel">`;
+                html += `<canvas id="canvas_${escapeHtml(key)}"></canvas>`;
+                html += '</div></div>';
+            });
+
+            html += '</div>';
+            return html;
+        }
+
+        /** Toggle a chart ÔÇö only one open at a time */
+        function toggleChart(btn, chartId) {
+            const isSame = (activeChart === chartId);
+
+            // Close any currently open chart
+            if (activeChart) {
+                const prev = document.getElementById('chart_' + activeChart);
+                const prevBtn = document.querySelector(`.stats-chart-toggle[data-chart="${activeChart}"]`);
+                if (prev) prev.classList.remove('visible');
+                if (prevBtn) prevBtn.classList.remove('active');
+                activeChart = null;
+            }
+
+            // If clicking the same button, just close (toggle off)
+            if (isSame) return;
+
+            // Open the new chart
+            const wrap = document.getElementById('chart_' + chartId);
+            if (!wrap) return;
+            activeChart = chartId;
+            wrap.classList.add('visible');
+            btn.classList.add('active');
+            drawChart(chartId);
+        }
+
+        /** Restore the active chart after DOM refresh */
+        function restoreVisibleCharts() {
+            if (!activeChart) return;
+            const wrap = document.getElementById('chart_' + activeChart);
+            const btn = document.querySelector(`.stats-chart-toggle[data-chart="${activeChart}"]`);
+            if (wrap) wrap.classList.add('visible');
+            if (btn) btn.classList.add('active');
+            drawChart(activeChart);
+        }
+
+        /** Route to the right draw function */
+        function drawChart(chartId) {
+            if (chartId === 'news2') { drawNews2Chart(); return; }
+            if (chartId.startsWith('vital_')) {
+                const vitalName = chartId.substring(6).replace(/_/g, ' ');
+                drawVitalChart(chartId, vitalName);
+            }
+        }
+
+        // ÔöÇÔöÇ Professional chart rendering ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
+        const FONT = '"Inter","Segoe UI",system-ui,-apple-system,sans-serif';
+
+        function hiDpiCanvas(canvas, logicalW, logicalH) {
+            const dpr = window.devicePixelRatio || 1;
+            canvas.width  = logicalW  * dpr;
+            canvas.height = logicalH * dpr;
+            canvas.style.width  = logicalW  + 'px';
+            canvas.style.height = logicalH + 'px';
+            const ctx = canvas.getContext('2d');
+            ctx.scale(dpr, dpr);
+            return ctx;
+        }
+
+        /** Compute nice Y-axis ceiling ÔÇö rounds up to a clean number */
+        function niceCeil(val) {
+            if (val <= 0) return 1;
+            const mag = Math.pow(10, Math.floor(Math.log10(val)));
+            const norm = val / mag;
+            let nice;
+            if (norm <= 1) nice = 1;
+            else if (norm <= 1.5) nice = 1.5;
+            else if (norm <= 2) nice = 2;
+            else if (norm <= 3) nice = 3;
+            else if (norm <= 5) nice = 5;
+            else if (norm <= 7.5) nice = 7.5;
+            else nice = 10;
+            return nice * mag;
+        }
+
+        function drawBarChart(canvasId, title, bars, meanVal, meanLabel, yUnit) {
+            const canvas = document.getElementById(canvasId);
+            if (!canvas || bars.length === 0) return;
+
+            const W = 960, H = 420;
+            const ctx = hiDpiCanvas(canvas, W, H);
+
+            const rawMax = Math.max(...bars.map(b => b.value), meanVal || 0);
+            const maxVal = niceCeil(rawMax * 1.12) || 1;
+            const pad = { top: 54, bottom: 58, left: 66, right: 120 };
+            const plotW = W - pad.left - pad.right;
+            const plotH = H - pad.top - pad.bottom;
+            const barW = Math.max(28, Math.min(72, plotW / bars.length * 0.52));
+            const gap  = (plotW - barW * bars.length) / (bars.length + 1);
+
+            // ÔöÇÔöÇ Clear ÔöÇÔöÇ
+            ctx.clearRect(0, 0, W, H);
+
+            // ÔöÇÔöÇ Horizontal grid ÔöÇÔöÇ
+            const ticks = 5;
+            for (let i = 0; i <= ticks; i++) {
+                const v = (maxVal / ticks) * i;
+                const y = Math.round(H - pad.bottom - (v / maxVal) * plotH) + 0.5;
+                ctx.strokeStyle = (i === 0) ? '#e5e7eb' : '#f3f4f6';
+                ctx.lineWidth = 1;
+                ctx.beginPath(); ctx.moveTo(pad.left, y); ctx.lineTo(W - pad.right, y); ctx.stroke();
+                ctx.fillStyle = '#9ca3af';
+                ctx.font = `400 10.5px ${FONT}`;
+                ctx.textAlign = 'right'; ctx.textBaseline = 'middle';
+                ctx.fillText(v.toFixed(1), pad.left - 10, y);
+            }
+
+            // ÔöÇÔöÇ Axes ÔöÇÔöÇ
+            ctx.strokeStyle = '#d1d5db'; ctx.lineWidth = 1;
+            ctx.beginPath(); ctx.moveTo(pad.left, pad.top - 8); ctx.lineTo(pad.left, H - pad.bottom); ctx.stroke();
+            ctx.beginPath(); ctx.moveTo(pad.left, H - pad.bottom); ctx.lineTo(W - pad.right, H - pad.bottom); ctx.stroke();
+
+            // ÔöÇÔöÇ Bars (flat, no shadow, no rounded corners) ÔöÇÔöÇ
+            bars.forEach((b, i) => {
+                const x = Math.round(pad.left + gap + i * (barW + gap));
+                const h = (b.value / maxVal) * plotH;
+                const y = Math.round(H - pad.bottom - h);
+                const color = b.color || '#3b6fa0';
+
+                ctx.fillStyle = color;
+                ctx.fillRect(x, y, barW, H - pad.bottom - y);
+
+                // Value label
+                ctx.fillStyle = '#374151';
+                ctx.font = `500 10.5px ${FONT}`;
+                ctx.textAlign = 'center'; ctx.textBaseline = 'bottom';
+                ctx.fillText(b.value.toFixed(2), x + barW / 2, y - 5);
+
+                // X-axis label
+                ctx.fillStyle = '#4b5563';
+                ctx.font = `500 11px ${FONT}`;
+                ctx.textBaseline = 'top';
+                ctx.fillText(b.label, x + barW / 2, H - pad.bottom + 8);
+
+                if (b.sub) {
+                    ctx.fillStyle = '#9ca3af';
+                    ctx.font = `400 9.5px ${FONT}`;
+                    ctx.fillText(b.sub, x + barW / 2, H - pad.bottom + 24);
+                }
+            });
+
+            // ÔöÇÔöÇ Mean reference line ÔöÇÔöÇ
+            if (meanVal != null && Number.isFinite(meanVal)) {
+                const my = Math.round(H - pad.bottom - (meanVal / maxVal) * plotH) + 0.5;
+                ctx.strokeStyle = '#dc2626'; ctx.lineWidth = 1; ctx.setLineDash([5, 3]);
+                ctx.beginPath(); ctx.moveTo(pad.left, my); ctx.lineTo(W - pad.right, my); ctx.stroke();
+                ctx.setLineDash([]);
+                const lbl = `${meanLabel || 'Mean'}: ${meanVal.toFixed(2)}`;
+                ctx.font = `500 10.5px ${FONT}`;
+                const tw = ctx.measureText(lbl).width;
+                const px = 8, rr = 3;
+                const lx = W - pad.right + 8;
+                const ly = my - 9;
+                const pillW = tw + px * 2, pillH = 18;
+                ctx.fillStyle = '#fef2f2';
+                ctx.strokeStyle = '#fecaca'; ctx.lineWidth = 0.8;
+                ctx.beginPath();
+                ctx.moveTo(lx + rr, ly); ctx.lineTo(lx + pillW - rr, ly);
+                ctx.arcTo(lx + pillW, ly, lx + pillW, ly + rr, rr);
+                ctx.arcTo(lx + pillW, ly + pillH, lx + pillW - rr, ly + pillH, rr);
+                ctx.lineTo(lx + rr, ly + pillH);
+                ctx.arcTo(lx, ly + pillH, lx, ly + pillH - rr, rr);
+                ctx.arcTo(lx, ly, lx + rr, ly, rr);
+                ctx.closePath();
+                ctx.fill(); ctx.stroke();
+                ctx.fillStyle = '#b91c1c';
+                ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+                ctx.fillText(lbl, lx + px, my);
+            }
+
+            // ÔöÇÔöÇ Title ÔöÇÔöÇ
+            ctx.fillStyle = '#111827';
+            ctx.font = `600 13.5px ${FONT}`;
+            ctx.textAlign = 'left'; ctx.textBaseline = 'top';
+            ctx.fillText(title, pad.left, 18);
+
+            // ÔöÇÔöÇ Y axis unit ÔöÇÔöÇ
+            if (yUnit) {
+                ctx.save();
+                ctx.fillStyle = '#9ca3af';
+                ctx.font = `400 10px ${FONT}`;
+                ctx.textAlign = 'center';
+                ctx.translate(16, pad.top + plotH / 2);
+                ctx.rotate(-Math.PI / 2);
+                ctx.fillText(yUnit, 0, 0);
+                ctx.restore();
+            }
+        }
+
+        // ÔöÇÔöÇ Palette per chart type ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
+        const PALETTE = {
+            // Muted, consistent palette across chart types
+            news2:  ['#111827','#1f2937','#374151','#4b5563','#6b7280','#9ca3af','#111827','#374151'],
+            hr:     ['#111827','#1f2937','#374151','#4b5563','#6b7280','#9ca3af','#111827','#374151'],
+            bp:     ['#111827','#1f2937','#374151','#4b5563','#6b7280','#9ca3af','#111827','#374151'],
+            other:  ['#111827','#1f2937','#374151','#4b5563','#6b7280','#9ca3af','#111827','#374151']
+        };
+        function paletteFor(chartId) {
+            if (chartId === 'news2') return PALETTE.news2;
+            const n = chartId.toLowerCase();
+            if (n.includes('heart') || n.includes('pulse')) return PALETTE.hr;
+            if (n.includes('pressure') || n.includes('bp') || n.includes('blood')) return PALETTE.bp;
+            return PALETTE.other;
+        }
+
+        /** Draw the NEWS2 bar chart */
+        function drawNews2Chart() {
+            if (!lastDashboardData || !lastDashboardData.blockStatistics) return;
+            const s = lastDashboardData.blockStatistics;
+            if (!s.zScores || s.zScores.length === 0) return;
+            const pal = paletteFor('news2');
+            const bars = [...s.zScores].sort((a, b) => a.block.localeCompare(b.block)).map((z, i) => ({
+                label: z.block,
+                value: z.average,
+                sub: `n=${z.patients}`,
+                color: z.abnormal ? '#ef4444' : pal[i % pal.length]
+            }));
+            drawBarChart('canvas_news2', 'Average NEWS2 Score by Block', bars, s.mean, 'Mean', 'NEWS2');
+        }
+
+        /** Draw a vital sign bar chart */
+        function drawVitalChart(chartId, vitalName) {
+            if (!lastDashboardData || !lastDashboardData.blockStats) return;
+            const blocks = [...lastDashboardData.blockStats].sort((a, b) => a.block.localeCompare(b.block));
+            const pal = paletteFor(chartId);
+            let unit = '';
+            const bars = [];
+            blocks.forEach((b, i) => {
+                const vsa = (b.vitalSignAverages || []).find(v => v.vitalSign === vitalName);
+                if (vsa) {
+                    unit = vsa.unit || unit;
+                    bars.push({
+                        label: b.block,
+                        value: vsa.averageValue,
+                        sub: `n=${vsa.sampleCount}`,
+                        color: pal[i % pal.length]
+                    });
+                }
+            });
+            if (bars.length === 0) return;
+            const mean = bars.reduce((s, b) => s + b.value, 0) / bars.length;
+            drawBarChart('canvas_' + chartId, `${vitalName} by Block`, bars, mean, 'Mean', unit);
+        }
+
+        function renderStatsMetrics(s) {
+            return `
+                <div class="stats-grid">
+                    <div class="stats-metric"><div class="metric-label">Mean NEWS2</div><div class="metric-value">${formatMaybeNumber(s.mean, 2)}</div></div>
+                    <div class="stats-metric"><div class="metric-label">Median NEWS2</div><div class="metric-value">${formatMaybeNumber(s.median, 2)}</div></div>
+                    <div class="stats-metric"><div class="metric-label">Variance</div><div class="metric-value">${formatMaybeNumber(s.variance, 4)}</div></div>
+                    <div class="stats-metric"><div class="metric-label">Std Dev</div><div class="metric-value">${formatMaybeNumber(s.stdDev, 4)}</div></div>
+                    <div class="stats-metric"><div class="metric-label">Incidence</div><div class="metric-value">${formatMaybeNumber(s.incidenceRate, 4)}</div></div>
+                    <div class="stats-metric"><div class="metric-label">Prevalence</div><div class="metric-value">${formatMaybeNumber(s.prevalenceRate, 4)}</div></div>
+                    <div class="stats-metric"><div class="metric-label">95% CI</div><div class="metric-value">[${formatMaybeNumber(s.ciLower, 2)}, ${formatMaybeNumber(s.ciUpper, 2)}]</div></div>
+                </div>
+            `;
+        }
+
+        function renderZScoreTable(zScores) {
+            let html = '<table class="z-table">';
+            html += '<thead><tr><th>Block</th><th>Avg NEWS2</th><th>Patients</th><th>Z-Score</th><th>Status</th></tr></thead>';
+            html += '<tbody>';
+            const sorted = [...zScores].sort((a, b) => Math.abs(b.zScore) - Math.abs(a.zScore));
+            sorted.forEach(z => {
+                const cls = z.abnormal ? 'z-abnormal' : 'z-normal';
+                const flag = z.abnormal ? '\u26a0\ufe0f ABNORMAL' : '\u2705 Normal';
+                html += `<tr>
+                    <td style="font-weight:600;">${escapeHtml(z.block)}</td>
+                    <td>${formatMaybeNumber(z.average, 2)}</td>
+                    <td>${z.patients}</td>
+                    <td class="${cls}">${formatMaybeNumber(z.zScore, 4)}</td>
+                    <td class="${cls}">${flag}</td>
+                </tr>`;
+            });
+            html += '</tbody></table>';
+            return html;
+        }
+
+        function makeTrendKey(neighborhood, vitalSign) {
+            return `${neighborhood || ''}::${vitalSign || ''}`;
+        }
+
+        function appendVitalTrendPoints(data) {
+            if (!data || !data.neighborhoodStats) return;
+
+            const nowTs = Date.now();
+            const minTs = nowTs - TREND_WINDOW_MS;
+            data.neighborhoodStats.forEach(ns => {
+                const neighborhood = ns.neighborhood || '';
+                const list = ns.vitalSignAverages || [];
+                list.forEach(vsa => {
+                    const key = makeTrendKey(neighborhood, vsa.vitalSign);
+                    if (!vitalTrendHistory.has(key)) {
+                        vitalTrendHistory.set(key, {
+                            neighborhood,
+                            vitalSign: vsa.vitalSign || '',
+                            unit: vsa.unit || '',
+                            points: []
+                        });
+                    }
+
+                    const series = vitalTrendHistory.get(key);
+                    series.unit = vsa.unit || series.unit || '';
+                    series.points.push({
+                        ts: nowTs,
+                        value: Number(vsa.averageValue || 0)
+                    });
+
+                    series.points = series.points.filter(p => p && Number.isFinite(p.ts) && p.ts >= minTs);
+
+                    if (series.points.length > MAX_POINTS) {
+                        series.points.splice(0, series.points.length - MAX_POINTS);
+                    }
+                });
+            });
+
+            saveTrendHistory();
+        }
+
+        function renderTrendCharts(data) {
+            if (!data) {
+                return '<div class="empty">No trend data available</div>';
+            }
+
+            let html = '<div class="trend-grid">';
+            let hasAny = false;
+
+            const nowTs = Date.now();
+            const minTs = nowTs - TREND_WINDOW_MS;
+
+            Array.from(vitalTrendHistory.values())
+                .sort((a, b) => {
+                    const nameA = `${a.neighborhood || ''} ${a.vitalSign || ''}`.toLowerCase();
+                    const nameB = `${b.neighborhood || ''} ${b.vitalSign || ''}`.toLowerCase();
+                    return nameA.localeCompare(nameB);
+                })
+                .forEach(series => {
+                    if (!series || !series.points || series.points.length === 0) return;
+
+                    const visiblePoints = series.points.filter(p => p.ts >= minTs);
+                    if (visiblePoints.length === 0) return;
+
+                    hasAny = true;
+
+                    const points = buildPolylinePoints(visiblePoints, 300, 100, minTs, nowTs);
+                    const values = visiblePoints.map(p => p.value);
+                    const current = values[values.length - 1];
+                    const min = Math.min(...values);
+                    const max = Math.max(...values);
+
+                    html += `
+                        <div class="trend-card">
+                            <div class="trend-title">${escapeHtml(series.vitalSign || '')}</div>
+                            <div class="trend-subtitle">Neighborhood: ${escapeHtml(series.neighborhood || '')}</div>
+                            <div class="trend-current">${Number(current).toFixed(2)} ${escapeHtml(series.unit || '')}</div>
+                            <svg class="trend-svg" viewBox="0 0 320 120" preserveAspectRatio="none" role="img" aria-label="Trend chart for ${escapeHtml(series.vitalSign || '')}">
+                                <line x1="10" y1="110" x2="310" y2="110" stroke="#d1d5db" stroke-width="1" />
+                                <line x1="10" y1="10" x2="10" y2="110" stroke="#d1d5db" stroke-width="1" />
+                                <polyline fill="none" stroke="#111827" stroke-width="2.2" points="${points}" />
+                            </svg>
+                            <div class="trend-subtitle">Window: 1h ┬À Min: ${Number(min).toFixed(2)} ┬À Max: ${Number(max).toFixed(2)} ┬À Points: ${visiblePoints.length}</div>
+                        </div>
+                    `;
+                });
+
+            html += '</div>';
+            if (!hasAny) {
+                return '<div class="empty">No trend samples yet. Wait for refresh cycles.</div>';
+            }
+            return html;
+        }
+
+        function buildPolylinePoints(points, width, height, minTs, maxTs) {
+            if (!points || points.length === 0) return '';
+            const values = points.map(p => Number(p.value || 0));
+            const min = Math.min(...values);
+            const max = Math.max(...values);
+            const range = (max - min) || 1;
+
+            const left = 10;
+            const right = width + 10;
+            const top = 10;
+            const bottom = height + 10;
+            const tsRange = Math.max(1, (maxTs || Date.now()) - (minTs || (Date.now() - TREND_WINDOW_MS)));
+
+            if (points.length === 1) {
+                const y = bottom - ((points[0].value - min) / range) * height;
+                return `${right},${y} ${right},${y}`;
+            }
+
+            return points.map((point) => {
+                const normalizedTime = Math.min(1, Math.max(0, ((point.ts || minTs) - minTs) / tsRange));
+                const x = left + normalizedTime * width;
+                const v = Number(point.value || 0);
+                const y = bottom - ((v - min) / range) * height;
+                return `${x.toFixed(2)},${y.toFixed(2)}`;
+            }).join(' ');
+        }
+
+        function startAutoRefresh() {
+            if (autoRefreshHandle) {
+                clearInterval(autoRefreshHandle);
+            }
+            autoRefreshHandle = setInterval(() => loadDashboard(false), REFRESH_MS);
+        }
+        
+        function getRiskLevelBadge(score) {
+            if (score >= 7) return '­ƒö┤ HIGH';
+            if (score >= 5) return '­ƒƒí MEDIUM';
+            return '­ƒƒó LOW';
+        }
+        
+        function escapeHtml(text) {
+            const map = {
+                '&': '&amp;',
+                '<': '&lt;',
+                '>': '&gt;',
+                '"': '&quot;',
+                "'": '&#039;'
+            };
+            return String(text ?? '').replace(/[&<>"']/g, m => map[m]);
+        }
+        
+        // ÔöÇÔöÇ PDF Export ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
+        async function exportPDF() {
+            const btn = document.querySelector('button[onclick="exportPDF()"]');
+            const origText = btn.textContent;
+            btn.textContent = 'Generating...';
+            btn.disabled = true;
+
+            try {
+                // Temporarily expand all chart containers so they render
+                const hiddenCharts = document.querySelectorAll('.stats-chart-container:not(.visible)');
+                hiddenCharts.forEach(c => { c.style.display = 'block'; c.style.position = 'absolute'; c.style.left = '-9999px'; });
+
+                const container = document.querySelector('.container');
+                const scale = 2; // 2x for high quality
+                const canvas = await html2canvas(container, {
+                    scale: scale,
+                    useCORS: true,
+                    logging: false,
+                    backgroundColor: null,
+                    windowWidth: container.scrollWidth,
+                    windowHeight: container.scrollHeight
+                });
+
+                // Restore hidden charts
+                hiddenCharts.forEach(c => { c.style.display = ''; c.style.position = ''; c.style.left = ''; });
+
+                const imgData = canvas.toDataURL('image/png', 1.0);
+                const imgW = canvas.width;
+                const imgH = canvas.height;
+
+                // A4 landscape or portrait based on aspect ratio
+                const { jsPDF } = window.jspdf;
+                const ratio = imgW / imgH;
+                const orientation = ratio > 1.2 ? 'landscape' : 'portrait';
+                const pdf = new jsPDF({ orientation: orientation, unit: 'mm', format: 'a4' });
+
+                const pageW = pdf.internal.pageSize.getWidth();
+                const pageH = pdf.internal.pageSize.getHeight();
+                const margin = 8;
+                const usableW = pageW - margin * 2;
+                const usableH = pageH - margin * 2;
+
+                // Scale image to fit page width, then paginate vertically
+                const scaledW = usableW;
+                const scaledH = (imgH / imgW) * scaledW;
+
+                if (scaledH <= usableH) {
+                    // Fits on one page
+                    pdf.addImage(imgData, 'PNG', margin, margin, scaledW, scaledH);
+                } else {
+                    // Multi-page: slice the canvas into page-sized chunks
+                    const sliceH = Math.floor((usableH / scaledH) * imgH);
+                    let yOffset = 0;
+                    let pageNum = 0;
+
+                    while (yOffset < imgH) {
+                        if (pageNum > 0) pdf.addPage();
+                        const sliceCanvas = document.createElement('canvas');
+                        sliceCanvas.width = imgW;
+                        const thisSliceH = Math.min(sliceH, imgH - yOffset);
+                        sliceCanvas.height = thisSliceH;
+                        const sCtx = sliceCanvas.getContext('2d');
+                        sCtx.drawImage(canvas, 0, yOffset, imgW, thisSliceH, 0, 0, imgW, thisSliceH);
+                        const sliceData = sliceCanvas.toDataURL('image/png', 1.0);
+                        const thisPageH = (thisSliceH / imgW) * scaledW;
+                        pdf.addImage(sliceData, 'PNG', margin, margin, scaledW, thisPageH);
+                        yOffset += sliceH;
+                        pageNum++;
+                    }
+                }
+
+                const now = new Date();
+                const ts = now.toISOString().slice(0, 19).replace(/[T:]/g, '-');
+                pdf.save(`dashboard-${ts}.pdf`);
+            } catch (err) {
+                console.error('PDF export failed:', err);
+                alert('PDF export failed: ' + err.message);
+            } finally {
+                btn.textContent = origText;
+                btn.disabled = false;
+            }
+        }
+
+        // Load dashboard on page load and keep refreshing every 5 seconds
+        window.addEventListener('load', () => {
+            loadTrendHistory();
+            loadDashboard(true);
+            startAutoRefresh();
+        });
+    </script>
+</body>
+</html>

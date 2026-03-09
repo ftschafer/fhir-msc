@@ -30,6 +30,7 @@ public class ObservationBatchProcessor {
         if (queue.isEmpty()) return;
         List<Observation> obs = queue.drain(BATCH_SIZE);
         if (obs.isEmpty()) return;
+
         Set<String> patients = news2Service.processBundleObservationsReturningPatients(obs);
         patients.forEach(cityService::updateCityForPatient);
     }
