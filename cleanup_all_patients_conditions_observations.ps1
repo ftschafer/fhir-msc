@@ -16,23 +16,23 @@ $BaseUrl = Ensure-TrailingSlash($BaseUrl)
 
 function Delete-AllResources($resourceType) {
   Write-Host "Deleting all $resourceType resources..."
-  $url = "$BaseUrl$resourceType?_count=1000"
+  $url = "{0}{1}?_count=1000" -f $BaseUrl, $resourceType
   Write-Host "GET: $url"
   try {
     $resources = Invoke-RestMethod -Uri $url -Method Get
   } catch {
-    Write-Host "ERROR fetching $resourceType: $($_.Exception.Message)"
+    Write-Host "ERROR fetching ${resourceType}: $($_.Exception.Message)"
     return
   }
   if ($resources.entry) {
     foreach ($entry in $resources.entry) {
       $rid = $entry.resource.id
-      $delUrl = "$BaseUrl$resourceType/$rid"
+      $delUrl = "{0}{1}/{2}" -f $BaseUrl, $resourceType, $rid
       Write-Host "DELETE: $delUrl"
       try {
         Invoke-RestMethod -Uri $delUrl -Method Delete -TimeoutSec 5 | Out-Null
       } catch {
-        Write-Host "ERROR deleting $resourceType/$rid: $($_.Exception.Message)"
+        Write-Host "ERROR deleting ${resourceType}/${rid}: $($_.Exception.Message)"
       }
     }
     Write-Host "All $resourceType resources deleted."

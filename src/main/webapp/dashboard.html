@@ -282,12 +282,9 @@
             <div class="data-section">
                 <h2 class="section-title">Socioeconomic Cluster Profiles (K-Means)</h2>
                 <p style="color: #666; margin-bottom: 15px;">Block-level clustering on 4 continuous features (HR, SBP, age, active conditions). Sex reported as demographic descriptor per cluster.</p>
-                <p style="color: #6b7280; margin-bottom: 10px; font-size: 12px;">Interpretation note: these cluster labels summarize all four variables together. Lower systolic BP is not automatically better here, because SBP below 100 mmHg is treated as hypotension risk.</p>
                 <p id="clusterQuality" style="color: #444; margin-bottom: 12px; font-size: 13px;"></p>
-                <div style="margin-bottom: 12px;">
-                    <button id="toggleKmeansGraphBtn" onclick="toggleKMeansGraph()" style="padding: 6px 14px; background: #374151; color: #fff; border: none; border-radius: 3px; cursor: pointer; font-weight: 500; font-size: 13px;">Show Cluster Scatter Plots</button>
-                </div>
-                <div id="kmeansGraphContainer" style="display:none; margin-bottom: 16px; padding: 16px; border: 1px solid #d1d5db; border-radius: 4px; background: #ffffff;">
+                <!-- Cluster scatter plot button removed -->
+                <div id="kmeansGraphContainer" style="display:block; margin-bottom: 16px; padding: 16px; border: 1px solid #d1d5db; border-radius: 4px; background: #ffffff;">
                     <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 16px;">
                         <div style="border: 1px solid #d1d5db; border-radius: 3px; padding: 12px; background: #fff;">
                             <canvas id="scatterBpAge" height="200"></canvas>
@@ -331,9 +328,8 @@
                 <table>
                     <thead>
                         <tr>
-                            <th>Patient</th>
                             <th>Condition</th>
-                            <th>Severity</th>
+                            <th>Total</th>
                         </tr>
                     </thead>
                     <tbody id="conditionsBody">
@@ -375,6 +371,7 @@
         let blockStatsChart = null;
         let latestClusters = [];
         let latestClusterPoints = [];
+        let latestReliableClusters = true;
         let latestVariancePc1 = 0;
         let latestVariancePc2 = 0;
         let latestPc1Loadings = [];
@@ -388,6 +385,22 @@
             return Number.isFinite(n) ? n.toFixed(digits) : 'N/A';
         }
 
+        function hasReliableClusterAnalysis(quality, clusters, clusterPoints) {
+            if (!quality) return false;
+            if (quality.lowConfidence) return false;
+            if (Number(quality.selectedK) < 2) return false;
+            if (Number(quality.runCount) < 1) return false;
+            if (!Array.isArray(clusters) || clusters.length === 0) return false;
+            if (!Array.isArray(clusterPoints) || clusterPoints.length === 0) return false;
+            return true;
+        }
+
+        function clearChart(key) {
+            if (!scatterCharts[key]) return;
+            scatterCharts[key].destroy();
+            delete scatterCharts[key];
+        }
+
         function toggleKMeansGraph() {
             const container = document.getElementById('kmeansGraphContainer');
             const button = document.getElementById('toggleKmeansGraphBtn');
@@ -397,7 +410,7 @@
             button.textContent = opening ? 'Hide Cluster Scatter Plots' : 'Show Cluster Scatter Plots';
 
             if (opening) {
-                renderKMeansGraph(latestClusters, latestClusterPoints);
+                renderKMeansGraph(latestClusters, latestClusterPoints, latestReliableClusters);
             }
         }
 
@@ -423,7 +436,7 @@
             button.textContent = opening ? 'Hide Vital Charts' : 'Show Vital Charts';
         }
 
-        function renderKMeansGraph(clusters, clusterPoints) {
+        function renderKMeansGraph(clusters, clusterPoints, reliableClusters = true) {
             if ((!clusters || clusters.length === 0) && (!clusterPoints || clusterPoints.length === 0)) {
                 return;
             }
@@ -445,15 +458,21 @@
                 'rgba(255, 127, 14, 1)',
                 'rgba(140, 86, 75, 1)'
             ];
+            const neutralFill = 'rgba(107, 114, 128, 0.45)';
+            const neutralStroke = 'rgba(107, 114, 128, 0.95)';
 
             // Group points by cluster
             const byCluster = new Map();
-            (clusterPoints || []).forEach(p => {
-                const cid = Number(p.clusterId);
-                if (!Number.isFinite(cid)) return;
-                if (!byCluster.has(cid)) byCluster.set(cid, []);
-                byCluster.get(cid).push(p);
-            });
+            if (reliableClusters) {
+                (clusterPoints || []).forEach(p => {
+                    const cid = Number(p.clusterId);
+                    if (!Number.isFinite(cid)) return;
+                    if (!byCluster.has(cid)) byCluster.set(cid, []);
+                    byCluster.get(cid).push(p);
+                });
+            } else if (clusterPoints && clusterPoints.length > 0) {
+                byCluster.set(-1, clusterPoints);
+            }
             const clusterIds = Array.from(byCluster.keys()).sort((a, b) => a - b);
 
             // Professional chart defaults
@@ -519,21 +538,60 @@
 
             // Build datasets for a scatter chart
             function makeScatterDatasets(xField, yField) {
+                function hashString(value) {
+                    const str = String(value || '');
+                    let h = 2166136261;
+                    for (let i = 0; i < str.length; i++) {
+                        h ^= str.charCodeAt(i);
+                        h = Math.imul(h, 16777619);
+                    }
+                    return h >>> 0;
+                }
+
+                function jitterAmplitude(field) {
+                    switch (field) {
+                        case 'activeConditions': return 0.12;
+                        case 'age': return 0.45;
+                        case 'heartRate': return 1.0;
+                        case 'systolicPressure': return 1.2;
+                        case 'pc1':
+                        case 'pc2':
+                            return 0.18;
+                        default:
+                            return 0.1;
+                    }
+                }
+
                 const datasets = [];
                 clusterIds.forEach((cid, idx) => {
                     const pts = (byCluster.get(cid) || []).map(p => ({
-                        x: Number(p[xField]) || 0,
-                        y: Number(p[yField]) || 0,
+                        x: (() => {
+                            const base = Number(p[xField]) || 0;
+                            if (reliableClusters) return base;
+                            const hx = hashString((p.patientId || '') + ':' + xField + ':x');
+                            const nx = ((hx / 4294967295) * 2) - 1;
+                            return base + (nx * jitterAmplitude(xField));
+                        })(),
+                        y: (() => {
+                            const base = Number(p[yField]) || 0;
+                            if (reliableClusters) return base;
+                            const hy = hashString((p.patientId || '') + ':' + yField + ':y');
+                            const ny = ((hy / 4294967295) * 2) - 1;
+                            return base + (ny * jitterAmplitude(yField));
+                        })(),
                         r: 3
                     }));
                     if (pts.length > 0) {
                         datasets.push({
-                            label: 'Cluster ' + cid,
+                            label: reliableClusters ? 'Cluster ' + cid : 'Patients',
                             data: pts,
-                            backgroundColor: palette[idx % palette.length],
-                            borderColor: paletteSolid[idx % palette.length],
+                            backgroundColor: reliableClusters ? palette[idx % palette.length] : neutralFill,
+                            borderColor: reliableClusters ? paletteSolid[idx % palette.length] : neutralStroke,
                             borderWidth: 0.6
                         });
+                    }
+                    if (!reliableClusters) {
+                        return;
                     }
                     const centroid = (clusters || []).find(c => Number(c.clusterId) === cid);
                     if (centroid) {
@@ -598,14 +656,16 @@
             const pc2Label = pcaAxisLabel('PC2', latestVariancePc2, latestPc2Loadings);
             const pcaTitle = document.getElementById('pcaChartTitle');
             if (pcaTitle) {
-                pcaTitle.textContent = 'PCA — ' + toFixedSafe(latestVariancePc1 + latestVariancePc2, 1) + '% total variance explained';
+                pcaTitle.textContent = reliableClusters
+                    ? 'PCA: ' + toFixedSafe(latestVariancePc1 + latestVariancePc2, 1) + '% of total variance captured by principal components'
+                    : 'PCA: low-confidence clustering, showing patients without group coloring';
             }
             upsertChart('scatterPca', 'scatterPca', 'bubble',
                 { datasets: makeScatterDatasets('pc1', 'pc2') },
                 scatterOpts(pc1Label, pc2Label, null));
 
             // 5. Sex Distribution (grouped bar — full width)
-            if (clusters && clusters.length > 0) {
+            if (reliableClusters && clusters && clusters.length > 0) {
                 const barOpts = {
                     responsive: true,
                     maintainAspectRatio: true,
@@ -660,6 +720,8 @@
                         { label: 'Female %', data: clusters.map(c => Number(c.pctFemale) || 0), backgroundColor: 'rgba(214,39,40,0.6)', borderColor: 'rgba(214,39,40,1)', borderWidth: 1, borderRadius: 1 }
                     ]
                 }, barOpts);
+            } else {
+                clearChart('chartSexDist');
             }
         }
 
@@ -925,15 +987,20 @@
             latestPc1Loadings = data.socioeconomicAnalysis?.pc1Loadings || [];
             latestPc2Loadings = data.socioeconomicAnalysis?.pc2Loadings || [];
             const q = data.socioeconomicAnalysis?.quality;
+            const reliableClusters = hasReliableClusterAnalysis(q, clusters, clusterPoints);
+            latestReliableClusters = reliableClusters;
             if (q) {
                 const warn = q.lowConfidence ? ` ⚠ low confidence (min ${toFixedSafe(q.minSilhouette, 3)})` : ' ✓ acceptable';
                 clusterQuality.textContent = `Quality: silhouette=${toFixedSafe(q.silhouetteScore, 3)} | selectedK=${q.selectedK ?? 'N/A'} | runs=${q.runCount ?? 'N/A'} | SSE=${toFixedSafe(q.withinClusterSse, 3)}${warn}`;
                 clusterQuality.style.color = q.lowConfidence ? '#b45309' : '#166534';
+                if (!reliableClusters) {
+                    clusterQuality.textContent += ' | cluster groups hidden';
+                }
             } else {
                 clusterQuality.textContent = 'Quality: not available (restart server to load latest analysis pipeline).';
                 clusterQuality.style.color = '#444';
             }
-            if (clusters.length > 0) {
+            if (reliableClusters && clusters.length > 0) {
                 clusters.forEach(c => {
                     clusterBody.innerHTML += `
                         <tr>
@@ -950,28 +1017,38 @@
                     `;
                 });
             } else {
-                clusterBody.innerHTML = '<tr><td colspan="9" style="text-align:center;">No cluster analysis available</td></tr>';
+                clusterBody.innerHTML = '<tr><td colspan="9" style="text-align:center;">No reliable cluster analysis available</td></tr>';
             }
 
             if (document.getElementById('kmeansGraphContainer').style.display !== 'none') {
-                renderKMeansGraph(clusters, clusterPoints);
+                renderKMeansGraph(clusters, clusterPoints, reliableClusters);
             }
 
             // Render conditions
             const conditionsBody = document.getElementById('conditionsBody');
             conditionsBody.innerHTML = '';
             if (data.conditions && data.conditions.length > 0) {
+                const conditionTotals = new Map();
                 data.conditions.forEach(c => {
+                    const label = (c.conditionName || 'Unknown').trim() || 'Unknown';
+                    conditionTotals.set(label, (conditionTotals.get(label) || 0) + 1);
+                });
+
+                Array.from(conditionTotals.entries())
+                    .sort((a, b) => {
+                        if (b[1] !== a[1]) return b[1] - a[1];
+                        return a[0].localeCompare(b[0]);
+                    })
+                    .forEach(([conditionName, total]) => {
                     conditionsBody.innerHTML += `
                         <tr>
-                            <td>${c.patientId}</td>
-                            <td>${c.conditionName}</td>
-                            <td>${c.severity || 'N/A'}</td>
+                            <td>${conditionName}</td>
+                            <td>${total}</td>
                         </tr>
                     `;
                 });
             } else {
-                conditionsBody.innerHTML = '<tr><td colspan="3" style="text-align:center;">No active conditions</td></tr>';
+                conditionsBody.innerHTML = '<tr><td colspan="2" style="text-align:center;">No active conditions</td></tr>';
             }
 
             // Render vital signs

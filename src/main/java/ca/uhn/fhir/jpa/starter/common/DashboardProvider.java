@@ -171,14 +171,14 @@ public class DashboardProvider implements IResourceProvider {
         
         stats.totalConditions = conditions.size();
         stats.conditions = conditions.stream()
-            .limit(50) // Limit to recent 50
             .map(res -> {
                 Condition c = (Condition) res;
                 ConditionSummary cs = new ConditionSummary();
                 cs.patientId = c.getSubject() != null ? c.getSubject().getReference() : "Unknown";
-                cs.conditionName = c.getCode() != null && c.getCode().hasCoding() 
-                    ? c.getCode().getCodingFirstRep().getDisplay() 
+                String rawConditionName = c.getCode() != null && c.getCode().hasCoding()
+                    ? c.getCode().getCodingFirstRep().getDisplay()
                     : c.getCode() != null ? c.getCode().getText() : "Unknown";
+                cs.conditionName = sanitizeConditionName(rawConditionName);
                 cs.onsetDate = c.getOnsetDateTimeType() != null 
                     ? c.getOnsetDateTimeType().getValueAsString() 
                     : null;
@@ -238,6 +238,19 @@ public class DashboardProvider implements IResourceProvider {
             stat.bootstrapMeanCiLow = ci[0];
             stat.bootstrapMeanCiHigh = ci[1];
         }
+    }
+
+    private String sanitizeConditionName(String conditionName) {
+        if (conditionName == null || conditionName.isBlank()) {
+            return "Unknown";
+        }
+
+        String normalized = conditionName
+            .replaceAll("\\s*\\(Match:\\s*[^)]*\\)", "")
+            .replaceAll("\\s*\\((Mild|Moderate|Severe)\\)", "")
+            .trim();
+
+        return normalized.isEmpty() ? "Unknown" : normalized;
     }
 
     private double[] bootstrapMeanConfidenceInterval(List<Integer> values, double confidenceLevel, int samples) {

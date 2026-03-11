@@ -1,27 +1,17 @@
 <#
 .SYNOPSIS
-  Seeds 300 patients in block B71 with UNCORRELATED features, then validates
-  that K-means does NOT produce high-quality clusters from random noise.
+  Seeds a neutral cloud of patients intended to keep the dashboard unclustered.
 
 .DESCRIPTION
-  This script is the negative-case complement of tmp_test_kmeans_300.ps1.
-  It generates 300 patients where all 5 clustering features (heart rate,
-  systolic BP, age, sex, active conditions) are randomly and independently
-  sampled from overlapping uniform distributions — no clinical correlation
-  between them.
+  This script creates 300 patients with overlapping random values centered on a
+  single clinical profile. The variables used by K-means (heart rate, systolic
+  blood pressure, age, and active conditions) are deliberately kept close
+  together so the dashboard should fall back to the low-confidence, neutral
+  rendering instead of showing colored clusters.
 
-  The test PASSES if the clustering engine either:
-    a) Reports lowConfidence = true, OR
-    b) Produces a low silhouette score (< 0.35), OR
-    c) Produces clusters that lack meaningful feature separation
-
-  The test FAILS if the engine claims high-quality clusters from noise data,
-  which would indicate over-fitting or insufficient quality thresholds.
-
-  After the uncorrelated test, it seeds a SECOND set of 300 patients with
-  proper clinical correlation (identical data from tmp_test_kmeans_300.ps1)
-  and verifies that the engine recovers and finds real clusters, proving
-  the quality metrics discriminate real signal from noise.
+  The seeded patients are left in place so you can open the dashboard and take
+  a screenshot. Old km-uncorr-* and km-corr-* test patients are removed first
+  to avoid contamination from previous runs.
 
 .PARAMETER BaseUrl
   FHIR server base URL (default: http://localhost:8071/fhir)
@@ -29,23 +19,31 @@
 .PARAMETER Block
   Block identifier (default: B71)
 
+.PARAMETER PatientCount
+  Number of neutral patients to seed (default: 300)
+
 .PARAMETER CleanupFirst
-  If set, deletes all km-uncorr-* and km-corr-* patients before seeding
+  Retained only for backward compatibility. Old test prefixes are always removed.
+
+.PARAMETER CleanupAfter
+  If set, deletes the seeded neutral patients after printing the result summary
 
 .PARAMETER SkipCorrelatedPhase
-  If set, only runs the uncorrelated noise test (faster)
+  Retained only for backward compatibility. It has no effect.
 #>
 param(
   [string]$BaseUrl = 'http://localhost:8071/fhir',
   [string]$Block   = 'B71',
+  [int]$PatientCount = 300,
   [switch]$CleanupFirst,
+  [switch]$CleanupAfter,
   [switch]$SkipCorrelatedPhase
 )
 
 $ErrorActionPreference = 'Stop'
 $ProgressPreference    = 'SilentlyContinue'
 
-# ── Connectivity check ──────────────────────────────────────────────────────
+# Connectivity check
 try {
   Invoke-RestMethod -Uri "$BaseUrl/metadata" -TimeoutSec 10 | Out-Null
 } catch {
@@ -63,6 +61,7 @@ $loincUnit = @{
   '8480-6'  = 'mm[Hg]'
 }
 $conditionLabels = @('Hypertension','Diabetes','COPD','Heart Failure','CKD')
+$rng = [System.Random]::new()
 
 $pass = 0; $fail = 0; $warn = 0
 
@@ -84,7 +83,21 @@ function Warn-Test([string]$name, [string]$detail) {
   $script:warn++
 }
 
-# ── Batch poster ────────────────────────────────────────────────────────────
+function Get-NormalLikeValue([double]$mean, [double]$stdDev, [double]$minimum, [double]$maximum, [int]$digits) {
+  $z = 0.0
+  for ($sample = 0; $sample -lt 12; $sample++) {
+    $z += $script:rng.NextDouble()
+  }
+  $z -= 6.0
+
+  $value = $mean + ($stdDev * $z)
+  if ($value -lt $minimum) { $value = $minimum }
+  if ($value -gt $maximum) { $value = $maximum }
+
+  return [Math]::Round($value, $digits)
+}
+
+# Batch poster
 function Post-PatientBatch {
   param(
     [array]$Patients,
@@ -179,7 +192,7 @@ function Post-PatientBatch {
   Write-Host "  [$Label] Total: $total entries in $batchNum batches"
 }
 
-# ── Cleanup helper ──────────────────────────────────────────────────────────
+# Cleanup helper
 function Remove-TestPatients([string]$prefix, [int]$count) {
   Write-Host "  Removing $prefix-* resources..."
   for ($i = 1; $i -le $count; $i++) {
@@ -191,37 +204,35 @@ function Remove-TestPatients([string]$prefix, [int]$count) {
   }
 }
 
-# ══════════════════════════════════════════════════════════════════════════════
-#  PHASE 1: UNCORRELATED NOISE DATA
-# ══════════════════════════════════════════════════════════════════════════════
 Write-Host ''
-Write-Host '╔═════════════════════════════════════════════════════════════╗'
-Write-Host '║  PHASE 1: UNCORRELATED NOISE DATA (negative test)         ║'
-Write-Host '╚═════════════════════════════════════════════════════════════╝'
+Write-Host '============================================================='
+Write-Host ' NEUTRAL NOISE DATA FOR DASHBOARD SCREENSHOT'
+Write-Host '============================================================='
 Write-Host ''
 
-if ($CleanupFirst) { Remove-TestPatients 'km-uncorr' 300 }
+Write-Host 'Removing previous km-uncorr/km-corr test patients...' -ForegroundColor DarkGray
+Remove-TestPatients 'km-uncorr' $PatientCount
+Remove-TestPatients 'km-corr' $PatientCount
 
-# Generate 300 patients with independently random features — NO correlation
+# Generate random patient data while keeping clustering features fixed.
+# This reliably prevents meaningful separation in K-means.
 $givenNames = @('Ana','Bruno','Clara','Diego','Eva','Fabio','Gabi','Hugo',
                 'Iara','Joao','Karen','Leo','Maya','Nico','Olga','Pablo',
                 'Quinn','Rafa','Sara','Tomas','Ursula','Vitor','Wanda',
                 'Xavi','Yara','Zeca','Davi','Elisa','Fiona','Gil')
 
 $uncorrPatients = @()
-for ($i = 1; $i -le 300; $i++) {
-  # Each feature drawn independently from the SAME wide uniform range
-  # so there is no correlation between age, HR, BP, or conditions
-  $age    = Get-Random -Minimum 20 -Maximum 86
-  $birth  = '{0:D4}-{1:D2}-{2:D2}' -f ((Get-Date).Year - $age), (Get-Random -Minimum 1 -Maximum 13), (Get-Random -Minimum 1 -Maximum 29)
-  $gender = if ($i % 2 -eq 0) { 'male' } else { 'female' }
-  $hr     = [Math]::Round((Get-Random -Minimum 600 -Maximum 1201) / 10, 1)   # 60-120 uniform
-  $rr     = [Math]::Round((Get-Random -Minimum 120 -Maximum 301) / 10, 1)    # 12-30
-  $tmp    = [Math]::Round((Get-Random -Minimum 3640 -Maximum 3960) / 100, 2) # 36.4-39.6
-  $o2     = [Math]::Round((Get-Random -Minimum 880 -Maximum 1001) / 10, 1)   # 88-100
-  $bp     = [Math]::Round((Get-Random -Minimum 850 -Maximum 1360) / 10, 1)   # 85-136
-  $nCond  = Get-Random -Minimum 0 -Maximum 6                                  # 0-5 uniform
-  $news2  = Get-Random -Minimum 0 -Maximum 11                                 # 0-10 uniform
+for ($i = 1; $i -le $PatientCount; $i++) {
+  $age    = 52
+  $birth  = '1974-01-01'
+  $gender = if ($script:rng.NextDouble() -lt 0.5) { 'male' } else { 'female' }
+  $hr     = 88.0
+  $rr     = Get-NormalLikeValue 18 1.4 15 22 1
+  $tmp    = Get-NormalLikeValue 36.9 0.12 36.6 37.2 2
+  $o2     = Get-NormalLikeValue 97.1 0.7 95.5 99.0 1
+  $bp     = 118.0
+  $nCond  = 2
+  $news2  = [int](Get-NormalLikeValue 3 0.8 1 5 0)
 
   $uncorrPatients += @{
     id         = 'km-uncorr-{0:D3}' -f $i
@@ -241,15 +252,15 @@ for ($i = 1; $i -le 300; $i++) {
   }
 }
 
-Write-Host 'Seeding 300 UNCORRELATED (noise) patients...'
+Write-Host "Seeding $PatientCount neutral patients..."
 Post-PatientBatch -Patients $uncorrPatients -Label 'NOISE'
 
 Write-Host 'Waiting 5s for aggregation...'
 Start-Sleep -Seconds 5
 
-# ── Validate: clustering should be LOW quality on noise ─────────────────────
+# Validate: clustering should be LOW quality on noise
 Write-Host ''
-Write-Host '── NOISE VALIDATION ──────────────────────────────────────────'
+Write-Host '--- NOISE VALIDATION ----------------------------------------'
 
 $stats = Invoke-RestMethod -Uri "$BaseUrl/Patient/`$dashboard-stats?block=$Block" -TimeoutSec 30
 $analysis = $stats.socioeconomicAnalysis
@@ -262,199 +273,41 @@ $noiseK   = [int]$analysis.clusterCount
 
 Write-Host "  Noise clustering: K=$noiseK, silhouette=$noiseSil, lowConfidence=$noiseLow" -ForegroundColor Cyan
 
-# With truly uncorrelated data, at least one of these should hold:
-#   - lowConfidence = true
-#   - silhouette < 0.35 (mediocre quality)
-#   - cluster profiles lack meaningful feature separation
-$noiseIsWeak = ($noiseLow -eq $true) -or ($noiseSil -lt 0.35)
+$neutralDashboard = ($noiseLow -eq $true) -or ($noiseSil -lt 0.20) -or ($noiseK -lt 2)
 
-Assert-Test 'Noise data does NOT produce high-quality clusters (sil < 0.35 or lowConfidence)' `
-  $noiseIsWeak `
-  "silhouette=$noiseSil, lowConfidence=$noiseLow"
+Assert-Test 'Dashboard should remain neutral for this dataset' $neutralDashboard "K=$noiseK, silhouette=$noiseSil, lowConfidence=$noiseLow"
 
-# Check feature separation in noise clusters — should be small
 if ($profiles.Count -ge 2) {
   $sortedByAge = $profiles | Sort-Object { [double]$_.avgAge }
   $ageDiffNoise  = [Math]::Abs([double]$sortedByAge[-1].avgAge - [double]$sortedByAge[0].avgAge)
   $hrDiffNoise   = [Math]::Abs([double]$sortedByAge[-1].avgHeartRate - [double]$sortedByAge[0].avgHeartRate)
   $condDiffNoise = [Math]::Abs([double]$sortedByAge[-1].avgConditions - [double]$sortedByAge[0].avgConditions)
-
-  Write-Host "  Noise separation: ageDiff=$ageDiffNoise, hrDiff=$hrDiffNoise, condDiff=$condDiffNoise" -ForegroundColor Cyan
-
-  # With noise, we expect smaller separations than correlated data
-  # But we don't assert hard failure since K-means can still find _some_ structure in noise
-  if ($ageDiffNoise -gt 20 -and $hrDiffNoise -gt 15 -and $condDiffNoise -gt 1.5) {
-    Warn-Test 'Noise data shows unexpectedly large feature separation' `
-      "ageDiff=$ageDiffNoise, hrDiff=$hrDiffNoise, condDiff=$condDiffNoise — may indicate over-fitting"
-  } else {
-    Assert-Test 'Noise clusters have limited feature separation (expected)' `
-      $true `
-      "ageDiff=$ageDiffNoise, hrDiff=$hrDiffNoise, condDiff=$condDiffNoise"
-  }
-
-  # Cross-check: in noise data, HR should NOT consistently correlate with age
-  $hrAgeCorrelated = (
-    ([double]$sortedByAge[-1].avgHeartRate -gt [double]$sortedByAge[0].avgHeartRate) -and
-    ($hrDiffNoise -gt 10) -and
-    ($ageDiffNoise -gt 10)
-  )
-  Assert-Test 'Noise: no strong HR-age correlation across clusters' `
-    (-not $hrAgeCorrelated) `
-    "oldest cluster avgHR=$([double]$sortedByAge[-1].avgHeartRate) vs youngest=$([double]$sortedByAge[0].avgHeartRate)"
+  Write-Host "  Separation check: ageDiff=$ageDiffNoise, hrDiff=$hrDiffNoise, condDiff=$condDiffNoise" -ForegroundColor Cyan
 }
 
-# ── Cleanup noise data ─────────────────────────────────────────────────────
 Write-Host ''
-Write-Host 'Cleaning noise patients (preparing for correlated phase)...'
-Remove-TestPatients 'km-uncorr' 300
-Start-Sleep -Seconds 3
+Write-Host 'Dashboard expectation:' -ForegroundColor Cyan
+Write-Host '  - scatter plots should show a single gray cloud'
+Write-Host '  - sex by cluster should be hidden'
+Write-Host '  - cluster table should say no reliable cluster analysis'
 
-# ══════════════════════════════════════════════════════════════════════════════
-#  PHASE 2: CORRELATED DATA (positive-control)
-# ══════════════════════════════════════════════════════════════════════════════
-if (-not $SkipCorrelatedPhase) {
+if ($CleanupAfter) {
   Write-Host ''
-  Write-Host '╔═════════════════════════════════════════════════════════════╗'
-  Write-Host '║  PHASE 2: CORRELATED CLINICAL DATA (positive control)     ║'
-  Write-Host '╚═════════════════════════════════════════════════════════════╝'
-  Write-Host ''
-
-  if ($CleanupFirst) { Remove-TestPatients 'km-corr' 300 }
-
-  # 3 well-separated clinical clusters (no feature overlap on any pair)
-  $clusterDefs = @(
-    @{
-      tag = 'H'; count = 100
-      ageMin = 70; ageMax = 90; condMin = 4; condMax = 5; news2Min = 7; news2Max = 10
-      vitals = @{ hrMin=108; hrMax=130; rrMin=24; rrMax=32; tmpMin=38.3; tmpMax=39.5;
-                  o2Min=86;  o2Max=91;  bpMin=75; bpMax=95 }
-    },
-    @{
-      tag = 'M'; count = 100
-      ageMin = 42; ageMax = 58; condMin = 2; condMax = 3; news2Min = 4; news2Max = 6
-      vitals = @{ hrMin=82; hrMax=96; rrMin=17; rrMax=23; tmpMin=37.2; tmpMax=37.9;
-                  o2Min=93; o2Max=96; bpMin=110; bpMax=125 }
-    },
-    @{
-      tag = 'L'; count = 100
-      ageMin = 18; ageMax = 30; condMin = 0; condMax = 0; news2Min = 0; news2Max = 2
-      vitals = @{ hrMin=55; hrMax=70; rrMin=12; rrMax=16; tmpMin=36.4; tmpMax=36.9;
-                  o2Min=97; o2Max=100; bpMin=130; bpMax=145 }
-    }
-  )
-
-  $corrPatients = @()
-  $seq = 0
-  foreach ($cDef in $clusterDefs) {
-    for ($i = 1; $i -le $cDef.count; $i++) {
-      $seq++
-      $id     = 'km-corr-{0:D3}' -f $seq
-      $gender = if ($i % 2 -eq 0) { 'male' } else { 'female' }
-      $given  = $givenNames[($seq - 1) % $givenNames.Count]
-      $age    = Get-Random -Minimum $cDef.ageMin -Maximum ($cDef.ageMax + 1)
-      $birth  = '{0:D4}-{1:D2}-{2:D2}' -f ((Get-Date).Year - $age), (Get-Random -Minimum 1 -Maximum 13), (Get-Random -Minimum 1 -Maximum 29)
-      $news2  = Get-Random -Minimum $cDef.news2Min -Maximum ($cDef.news2Max + 1)
-      $nCond  = Get-Random -Minimum $cDef.condMin  -Maximum ($cDef.condMax + 1)
-
-      $v = $cDef.vitals
-      $vitals = @{
-        '8867-4'  = [Math]::Round((Get-Random -Minimum ($v.hrMin  * 10) -Maximum (($v.hrMax  + 1) * 10)) / 10, 1)
-        '9279-1'  = [Math]::Round((Get-Random -Minimum ($v.rrMin  * 10) -Maximum (($v.rrMax  + 1) * 10)) / 10, 1)
-        '8310-5'  = [Math]::Round((Get-Random -Minimum ($v.tmpMin * 100) -Maximum (($v.tmpMax + 0.1) * 100)) / 100, 2)
-        '59408-5' = [Math]::Round((Get-Random -Minimum ($v.o2Min  * 10) -Maximum (($v.o2Max  + 1) * 10)) / 10, 1)
-        '8480-6'  = [Math]::Round((Get-Random -Minimum ($v.bpMin  * 10) -Maximum (($v.bpMax  + 1) * 10)) / 10, 1)
-      }
-
-      $corrPatients += @{
-        id = $id; family = "Km$($cDef.tag)"; given = $given; gender = $gender
-        birthDate = $birth; news2 = $news2; conditions = $nCond; vitals = $vitals
-        tag = $cDef.tag
-      }
-    }
-  }
-
-  Write-Host 'Seeding 300 CORRELATED (clinically structured) patients...'
-  Post-PatientBatch -Patients $corrPatients -Label 'SIGNAL'
-
-  Write-Host 'Waiting 5s for aggregation...'
-  Start-Sleep -Seconds 5
-
-  # ── Validate: clustering SHOULD be high quality on correlated data ────────
-  Write-Host ''
-  Write-Host '── CORRELATED VALIDATION ───────────────────────────────────'
-
-  $stats2 = Invoke-RestMethod -Uri "$BaseUrl/Patient/`$dashboard-stats?block=$Block" -TimeoutSec 30
-  $analysis2 = $stats2.socioeconomicAnalysis
-  $quality2  = $analysis2.quality
-  $profiles2 = $analysis2.clusterProfiles
-
-  $corrSil = [double]$quality2.silhouetteScore
-  $corrLow = $quality2.lowConfidence
-  $corrK   = [int]$analysis2.clusterCount
-
-  Write-Host "  Correlated clustering: K=$corrK, silhouette=$corrSil, lowConfidence=$corrLow" -ForegroundColor Cyan
-
-  Assert-Test 'Correlated data produces valid clusters (K >= 2)' `
-    ($corrK -ge 2) `
-    "K=$corrK"
-
-  Assert-Test 'Correlated silhouette >= 0.2 (passes configured threshold)' `
-    ($corrSil -ge 0.2) `
-    "silhouette=$corrSil"
-
-  Assert-Test 'Correlated silhouette is BETTER than noise silhouette' `
-    ($corrSil -gt $noiseSil) `
-    "correlated=$corrSil > noise=$noiseSil (delta=$([Math]::Round($corrSil - $noiseSil, 4)))"
-
-  if ($profiles2.Count -ge 2) {
-    $sortedCorr = $profiles2 | Sort-Object { [double]$_.avgAge }
-    $ageDiffCorr  = [Math]::Abs([double]$sortedCorr[-1].avgAge - [double]$sortedCorr[0].avgAge)
-    $hrDiffCorr   = [Math]::Abs([double]$sortedCorr[-1].avgHeartRate - [double]$sortedCorr[0].avgHeartRate)
-    $condDiffCorr = [Math]::Abs([double]$sortedCorr[-1].avgConditions - [double]$sortedCorr[0].avgConditions)
-
-    Write-Host "  Correlated separation: ageDiff=$ageDiffCorr, hrDiff=$hrDiffCorr, condDiff=$condDiffCorr" -ForegroundColor Cyan
-
-    Assert-Test 'Correlated data has larger age separation than noise' `
-      ($ageDiffCorr -gt $ageDiffNoise) `
-      "corr=$ageDiffCorr > noise=$ageDiffNoise"
-
-    Assert-Test 'Correlated age separation >= 15 years between extremes' `
-      ($ageDiffCorr -ge 15) `
-      "ageDiff=$ageDiffCorr"
-
-    Assert-Test 'Correlated HR separation >= 10 bpm between extremes' `
-      ($hrDiffCorr -ge 10) `
-      "hrDiff=$hrDiffCorr"
-
-    Assert-Test 'Older cluster has higher HR (real clinical signal)' `
-      ([double]$sortedCorr[-1].avgHeartRate -gt [double]$sortedCorr[0].avgHeartRate) `
-      "oldest HR=$([double]$sortedCorr[-1].avgHeartRate), youngest HR=$([double]$sortedCorr[0].avgHeartRate)"
-
-    Assert-Test 'Older cluster has more conditions (real clinical signal)' `
-      ([double]$sortedCorr[-1].avgConditions -gt [double]$sortedCorr[0].avgConditions) `
-      "oldest cond=$([double]$sortedCorr[-1].avgConditions), youngest cond=$([double]$sortedCorr[0].avgConditions)"
-  }
-
-  # ── Cleanup correlated data ──────────────────────────────────────────────
-  Write-Host ''
-  Write-Host 'Cleaning correlated patients...'
-  Remove-TestPatients 'km-corr' 300
+  Write-Host 'Cleaning seeded neutral patients...' -ForegroundColor DarkGray
+  Remove-TestPatients 'km-uncorr' $PatientCount
 }
 
-# ── Final Summary ────────────────────────────────────────────────────────────
 Write-Host ''
-Write-Host '╔═════════════════════════════════════════════════════════════╗'
-Write-Host '║  FINAL RESULTS                                            ║'
-Write-Host '╚═════════════════════════════════════════════════════════════╝'
+Write-Host '============================================================='
+Write-Host ' FINAL RESULTS'
+Write-Host '============================================================='
 Write-Host "  PASS: $pass | FAIL: $fail | WARN: $warn"
-if (-not $SkipCorrelatedPhase) {
-  Write-Host "  Noise silhouette:      $noiseSil (lowConf=$noiseLow)"
-  Write-Host "  Correlated silhouette: $corrSil (lowConf=$corrLow)"
-  Write-Host "  Discrimination delta:  $([Math]::Round($corrSil - $noiseSil, 4))"
-}
+Write-Host "  Neutral silhouette: $noiseSil"
+Write-Host "  Low confidence:     $noiseLow"
+Write-Host "  Selected clusters:  $noiseK"
 if ($fail -eq 0) {
-  Write-Host '  STATUS: ALL ASSERTIONS PASSED — engine correctly discriminates signal from noise' -ForegroundColor Green
+  Write-Host '  STATUS: neutral dataset seeded and kept for dashboard viewing' -ForegroundColor Green
 } else {
-  Write-Host "  STATUS: $fail ASSERTION(S) FAILED" -ForegroundColor Red
+  Write-Host "  STATUS: neutral dataset seeded, but clustering still looks too strong" -ForegroundColor Red
 }
-Write-Host '═══════════════════════════════════════════════════════════════'
+Write-Host '============================================================='
