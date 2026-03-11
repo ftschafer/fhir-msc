@@ -410,6 +410,24 @@ public class DashboardProvider implements IResourceProvider {
         json.append("\"socioeconomicAnalysis\":{");
         json.append("\"sampleSize\":").append(stats.socioeconomicAnalysis.sampleSize()).append(",");
         json.append("\"clusterCount\":").append(stats.socioeconomicAnalysis.clusterCount()).append(",");
+        json.append("\"varianceExplainedPc1\":").append(String.format(Locale.US, "%.2f", stats.socioeconomicAnalysis.varianceExplainedPc1())).append(",");
+        json.append("\"varianceExplainedPc2\":").append(String.format(Locale.US, "%.2f", stats.socioeconomicAnalysis.varianceExplainedPc2())).append(",");
+        // PCA loadings (eigenvector components): [HR, SBP, age, conditions]
+        String[] featureNames = {"HR", "SBP", "Age", "Cond"};
+        double[] ld1 = stats.socioeconomicAnalysis.pc1Loadings();
+        double[] ld2 = stats.socioeconomicAnalysis.pc2Loadings();
+        json.append("\"pc1Loadings\":[");
+        for (int i = 0; i < ld1.length; i++) {
+            if (i > 0) json.append(",");
+            json.append(String.format(Locale.US, "{\"feature\":\"%s\",\"loading\":%.4f}", featureNames[i], ld1[i]));
+        }
+        json.append("],");
+        json.append("\"pc2Loadings\":[");
+        for (int i = 0; i < ld2.length; i++) {
+            if (i > 0) json.append(",");
+            json.append(String.format(Locale.US, "{\"feature\":\"%s\",\"loading\":%.4f}", featureNames[i], ld2[i]));
+        }
+        json.append("],");
         json.append("\"quality\":{");
         json.append("\"selectedK\":").append(stats.socioeconomicAnalysis.quality().selectedK()).append(",");
         json.append("\"silhouetteScore\":").append(String.format(Locale.US, "%.3f", stats.socioeconomicAnalysis.quality().silhouetteScore())).append(",");

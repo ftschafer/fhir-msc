@@ -46,6 +46,18 @@ public class BlockSocioeconomicAnalysisService {
     @Value("${hapi.fhir.analysis.socioeconomic.kmeans.max-singleton-ratio:0.20}")
     private double maxSingletonRatio;
 
+    @Value("${hapi.fhir.analysis.socioeconomic.kmeans.weight-heart-rate:0.9}")
+    private double weightHeartRate;
+
+    @Value("${hapi.fhir.analysis.socioeconomic.kmeans.weight-systolic-pressure:1.0}")
+    private double weightSystolicPressure;
+
+    @Value("${hapi.fhir.analysis.socioeconomic.kmeans.weight-age:1.1}")
+    private double weightAge;
+
+    @Value("${hapi.fhir.analysis.socioeconomic.kmeans.weight-active-conditions:1.2}")
+    private double weightActiveConditions;
+
     public BlockSocioeconomicAnalysisService(DaoRegistry daoRegistry) {
         this.daoRegistry = daoRegistry;
     }
@@ -91,7 +103,8 @@ public class BlockSocioeconomicAnalysisService {
 
         List<double[]> standardized = standardizeFeatures(rows);
         KMeansSelectionResult selected = selectBestModel(standardized);
-        List<double[]> pcaProjection = projectPca2D(standardized);
+        PcaResult pcaResult = projectPca2D(standardized);
+        List<double[]> pcaProjection = pcaResult.projections;
         List<ClusterProfile> profiles = toProfiles(rows, selected.assignment, selected.k, pcaProjection);
         List<ClusterPoint> points = toClusterPoints(rows, selected.assignment, selected.k, pcaProjection);
 
@@ -107,7 +120,9 @@ public class BlockSocioeconomicAnalysisService {
                 round(selected.adjustedSilhouette)
         );
 
-        return new AnalysisOutput(rows.size(), selected.k, profiles, points, quality);
+        return new AnalysisOutput(rows.size(), selected.k, profiles, points, quality,
+                round(pcaResult.varianceExplainedPc1), round(pcaResult.varianceExplainedPc2),
+                pcaResult.pc1Loadings, pcaResult.pc2Loadings);
     }
 
     private KMeansSelectionResult selectBestModel(List<double[]> standardizedFeatures) {
@@ -364,9 +379,15 @@ public class BlockSocioeconomicAnalysisService {
     }
 
     private List<double[]> standardizeFeatures(List<FeatureRow> rows) {
-        int featureCount = 5;
+        int featureCount = 4;
         double[] means = new double[featureCount];
         double[] stdDevs = new double[featureCount];
+        double[] weights = new double[]{
+                weightHeartRate,
+                weightSystolicPressure,
+                weightAge,
+                weightActiveConditions
+        };
 
         List<double[]> matrix = new ArrayList<>(rows.size());
         for (FeatureRow row : rows) {
@@ -374,7 +395,6 @@ public class BlockSocioeconomicAnalysisService {
                     row.heartRate,
                     row.systolicPressure,
                     row.age,
-                    row.sexEncoded,
                     row.activeConditions
             };
             matrix.add(vector);
@@ -402,16 +422,16 @@ public class BlockSocioeconomicAnalysisService {
         for (double[] vector : matrix) {
             double[] z = new double[featureCount];
             for (int i = 0; i < featureCount; i++) {
-                z[i] = stdDevs[i] > 0.0 ? (vector[i] - means[i]) / stdDevs[i] : 0.0;
+                z[i] = (stdDevs[i] > 0.0 ? (vector[i] - means[i]) / stdDevs[i] : 0.0) * weights[i];
             }
             standardized.add(z);
         }
         return standardized;
     }
 
-    private List<double[]> projectPca2D(List<double[]> standardizedFeatures) {
+    private PcaResult projectPca2D(List<double[]> standardizedFeatures) {
         if (standardizedFeatures.isEmpty()) {
-            return List.of();
+            return new PcaResult(List.of(), 0.0, 0.0, new double[0], new double[0]);
         }
 
         int dimension = standardizedFeatures.get(0).length;
@@ -422,12 +442,21 @@ public class BlockSocioeconomicAnalysisService {
 
         double[][] deflated = deflate(covariance, pc1Vector, eigenvalue1);
         double[] pc2Vector = dominantEigenvector(deflated, 120);
+        double eigenvalue2 = eigenvalue(deflated, pc2Vector);
+
+        // Compute total variance (trace of covariance matrix)
+        double totalVariance = 0.0;
+        for (int i = 0; i < dimension; i++) {
+            totalVariance += covariance[i][i];
+        }
+        double variancePc1 = totalVariance > 0 ? (eigenvalue1 / totalVariance) * 100.0 : 0.0;
+        double variancePc2 = totalVariance > 0 ? (Math.max(0, eigenvalue2) / totalVariance) * 100.0 : 0.0;
 
         List<double[]> projection = new ArrayList<>(standardizedFeatures.size());
         for (double[] row : standardizedFeatures) {
             projection.add(new double[]{dot(row, pc1Vector), dot(row, pc2Vector)});
         }
-        return projection;
+        return new PcaResult(projection, variancePc1, variancePc2, pc1Vector, pc2Vector);
     }
 
     private double[][] covarianceMatrix(List<double[]> points, int dimension) {
@@ -723,10 +752,14 @@ public class BlockSocioeconomicAnalysisService {
             int clusterCount,
             List<ClusterProfile> clusterProfiles,
             List<ClusterPoint> clusterPoints,
-            AnalysisQuality quality
+            AnalysisQuality quality,
+            double varianceExplainedPc1,
+            double varianceExplainedPc2,
+            double[] pc1Loadings,
+            double[] pc2Loadings
         ) {
         public static AnalysisOutput empty() {
-            return new AnalysisOutput(0, 0, List.of(), List.of(), new AnalysisQuality(0, 0.0, 0, 0.0, 0.2, true, 0, 0, 0.0));
+            return new AnalysisOutput(0, 0, List.of(), List.of(), new AnalysisQuality(0, 0.0, 0, 0.0, 0.2, true, 0, 0, 0.0), 0.0, 0.0, new double[0], new double[0]);
         }
     }
 
@@ -834,18 +867,65 @@ public class BlockSocioeconomicAnalysisService {
             double pctMale = (maleCount * 100.0) / size;
             double pctFemale = (femaleCount * 100.0) / size;
 
-            String label;
-            if (avgHeartRate >= 100.0 || avgSystolicPressure >= 140.0) {
-                label = "Hemodynamic high-strain cluster";
-            } else if (avgHeartRate >= 85.0 || avgSystolicPressure >= 125.0) {
-                label = avgAge >= 65.0
-                        ? "Older-population moderate-vitals cluster"
-                        : "Moderate-vitals cluster";
-            } else if (avgAge >= 65.0) {
-                label = "Older-population lower-vitals-strain cluster";
+            // Risk scoring: combine clinical signals into a single score
+            // Higher score = higher clinical risk
+            double riskScore = 0.0;
+            if (avgHeartRate >= 100.0) riskScore += 2.0;
+            else if (avgHeartRate >= 85.0) riskScore += 1.0;
+            if (avgSystolicPressure < 100.0) riskScore += 1.5;   // hypotension risk
+            if (avgAge >= 65.0) riskScore += 2.0;
+            else if (avgAge >= 45.0) riskScore += 1.0;
+            if (avgConditions >= 3.0) riskScore += 2.0;
+            else if (avgConditions >= 1.0) riskScore += 1.0;
+
+            String ageDescriptor;
+            if (avgAge >= 65.0) {
+                ageDescriptor = "Older";
+            } else if (avgAge >= 45.0) {
+                ageDescriptor = "Midlife";
             } else {
-                label = "Lower-vitals-strain cluster";
+                ageDescriptor = "Younger";
             }
+
+            String bpDescriptor;
+            if (avgSystolicPressure < 100.0) {
+                bpDescriptor = "low-SBP";
+            } else if (avgSystolicPressure >= 140.0) {
+                bpDescriptor = "high-SBP";
+            } else {
+                bpDescriptor = "mid-SBP";
+            }
+
+            String conditionDescriptor;
+            if (avgConditions >= 3.0) {
+                conditionDescriptor = "multimorbid";
+            } else if (avgConditions >= 1.0) {
+                conditionDescriptor = "comorbid";
+            } else {
+                conditionDescriptor = "low-comorbidity";
+            }
+
+            String hrDescriptor;
+            if (avgHeartRate >= 100.0) {
+                hrDescriptor = "tachycardic";
+            } else if (avgHeartRate >= 85.0) {
+                hrDescriptor = "elevated-HR";
+            } else {
+                hrDescriptor = "stable-HR";
+            }
+
+            String riskDescriptor;
+            if (riskScore >= 5.0) {
+                riskDescriptor = "higher overall risk";
+            } else if (riskScore >= 3.0) {
+                riskDescriptor = "moderate overall risk";
+            } else if (riskScore >= 1.5) {
+                riskDescriptor = "lower overall risk";
+            } else {
+                riskDescriptor = "lowest overall risk";
+            }
+
+            String label = ageDescriptor + " " + bpDescriptor + " " + conditionDescriptor + " " + hrDescriptor + " cluster (" + riskDescriptor + ")";
 
             if (pctMale >= 65.0) {
                 label += " (male-majority)";
@@ -871,6 +951,10 @@ public class BlockSocioeconomicAnalysisService {
         private double round(double value) {
             return Math.round(value * 100.0) / 100.0;
         }
+    }
+
+    private record PcaResult(List<double[]> projections, double varianceExplainedPc1, double varianceExplainedPc2,
+                               double[] pc1Loadings, double[] pc2Loadings) {
     }
 
     private record KMeansResult(int[] assignment, double wcss) {

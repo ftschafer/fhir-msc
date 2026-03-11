@@ -12,65 +12,69 @@
             box-sizing: border-box;
         }
         body {
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            padding: 20px;
+            font-family: 'Segoe UI', 'Helvetica Neue', Arial, sans-serif;
+            background: #f3f4f6;
+            color: #111827;
+            padding: 24px;
             min-height: 100vh;
         }
         .container {
-            max-width: 1400px;
+            max-width: 1200px;
             margin: 0 auto;
         }
         header {
-            background: white;
-            padding: 20px 30px;
-            border-radius: 10px;
-            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            background: #f9fafb;
+            padding: 16px 24px;
+            border-radius: 3px;
+            border: 1px solid #d1d5db;
+            box-shadow: none;
             margin-bottom: 20px;
         }
         h1 {
-            color: #333;
-            font-size: 28px;
-            margin-bottom: 5px;
+            color: #111827;
+            font-size: 22px;
+            font-weight: 600;
+            margin-bottom: 4px;
         }
         .subtitle {
-            color: #666;
+            color: #4b5563;
             font-size: 14px;
         }
         .filter-bar {
-            background: white;
-            padding: 15px 30px;
-            border-radius: 10px;
-            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            background: #f9fafb;
+            padding: 12px 16px;
+            border-radius: 3px;
+            border: 1px solid #d1d5db;
             margin-bottom: 20px;
             display: flex;
-            gap: 15px;
+            gap: 12px;
             align-items: center;
         }
         .filter-bar label {
-            font-weight: 600;
-            color: #555;
+            font-weight: 500;
+            color: #111827;
         }
         .filter-bar input {
             padding: 8px 15px;
-            border: 2px solid #ddd;
-            border-radius: 5px;
+            border: 1px solid #d1d5db;
+            border-radius: 4px;
             font-size: 14px;
             flex: 1;
             max-width: 300px;
         }
         .filter-bar button {
-            padding: 8px 20px;
-            background: #667eea;
+            padding: 6px 16px;
+            background: #374151;
             color: white;
             border: none;
-            border-radius: 5px;
+            border-radius: 3px;
             cursor: pointer;
-            font-weight: 600;
-            transition: background 0.3s;
+            font-weight: 500;
+            font-size: 13px;
+            transition: background 0.2s;
         }
         .filter-bar button:hover {
-            background: #5568d3;
+            background: #1f2937;
         }
         .stats-grid {
             display: grid;
@@ -79,37 +83,40 @@
             margin-bottom: 20px;
         }
         .stat-card {
-            background: white;
-            padding: 25px;
-            border-radius: 10px;
-            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            background: #f9fafb;
+            padding: 20px;
+            border-radius: 3px;
+            border: 1px solid #d1d5db;
+            box-shadow: none;
             text-align: center;
         }
         .stat-value {
-            font-size: 36px;
-            font-weight: bold;
-            color: #667eea;
-            margin: 10px 0;
+            font-size: 28px;
+            font-weight: 700;
+            color: #111827;
+            margin: 8px 0;
         }
         .stat-label {
-            color: #666;
+            color: #6b7280;
             font-size: 14px;
             text-transform: uppercase;
             letter-spacing: 1px;
         }
         .data-section {
-            background: white;
-            padding: 25px;
-            border-radius: 10px;
-            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
-            margin-bottom: 20px;
+            background: #f9fafb;
+            padding: 20px;
+            border-radius: 3px;
+            border: 1px solid #d1d5db;
+            box-shadow: none;
+            margin-bottom: 16px;
         }
         .section-title {
-            font-size: 20px;
-            color: #333;
-            margin-bottom: 15px;
-            padding-bottom: 10px;
-            border-bottom: 2px solid #f0f0f0;
+            font-size: 16px;
+            font-weight: 600;
+            color: #111827;
+            margin-bottom: 12px;
+            padding-bottom: 8px;
+            border-bottom: 1px solid #d1d5db;
         }
         table {
             width: 100%;
@@ -120,7 +127,7 @@
             padding: 12px;
             text-align: left;
             font-weight: 600;
-            color: #555;
+            color: #4b5563;
             border-bottom: 2px solid #e0e0e0;
         }
         td {
@@ -128,7 +135,7 @@
             border-bottom: 1px solid #f0f0f0;
         }
         tr:hover {
-            background: #f8f9fa;
+            background: #f3f4f6;
         }
         .status-indicator {
             display: inline-block;
@@ -149,14 +156,14 @@
         .loading {
             text-align: center;
             padding: 40px;
-            color: #666;
+            color: #4b5563;
         }
         .error-message {
-            background: #fff3cd;
-            border: 1px solid #ffc107;
-            color: #856404;
+            background: #f8d7da;
+            border: 1px solid #f5c6cb;
+            color: #721c24;
             padding: 15px;
-            border-radius: 5px;
+            border-radius: 4px;
             margin: 20px 0;
         }
         .risk-low { color: #28a745; font-weight: 600; }
@@ -164,7 +171,7 @@
         .risk-high { color: #dc3545; font-weight: 600; }
         .last-updated {
             text-align: right;
-            color: #666;
+            color: #4b5563;
             font-size: 12px;
             padding: 10px;
         }
@@ -180,15 +187,16 @@
             margin-bottom: 20px;
         }
         .chart-card {
-            background: white;
-            padding: 20px;
-            border-radius: 10px;
-            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            background: #f9fafb;
+            padding: 16px;
+            border-radius: 3px;
+            border: 1px solid #d1d5db;
+            box-shadow: none;
         }
         .chart-title {
             font-size: 16px;
             font-weight: 600;
-            color: #333;
+            color: #111827;
             margin-bottom: 15px;
             text-align: center;
         }
@@ -197,20 +205,13 @@
 <body>
     <div class="container">
         <header>
-            <h1>🏥 FHIR Clinical Dashboard</h1>
+            <h1>FHIR Clinical Dashboard</h1>
             <p class="subtitle">Block Level Monitoring System</p>
             <p class="last-updated">Last updated: <span id="lastUpdate">Never</span></p>
         </header>
 
-        <div class="filter-bar">
-            <label for="blockFilter">Block Filter:</label>
-            <input type="text" id="blockFilter" placeholder="Enter block name (e.g., North, Block-A)">
-            <button onclick="loadDashboard()">Apply Filter</button>
-            <button onclick="document.getElementById('blockFilter').value=''; loadDashboard()">Clear</button>
-        </div>
-
         <div id="loading" class="loading">
-            <p class="status-loading">⏳ Loading dashboard data...</p>
+            <p class="status-loading">Loading dashboard data...</p>
         </div>
 
         <div id="error" class="error-message" style="display: none;"></div>
@@ -226,17 +227,13 @@
                     <div class="stat-value" id="totalConditions">0</div>
                 </div>
                 <div class="stat-card">
-                    <div class="stat-label">Vital Sign Averages</div>
-                    <div class="stat-value" id="totalAverages">0</div>
-                </div>
-                <div class="stat-card">
                     <div class="stat-label">Avg NEWS2 Score</div>
                     <div class="stat-value" id="avgNews2">0</div>
                 </div>
             </div>
 
             <div class="data-section">
-                <h2 class="section-title">📍 Patients by Block</h2>
+                <h2 class="section-title">Patients by Block</h2>
                 <table>
                     <thead>
                         <tr>
@@ -257,7 +254,7 @@
                 </table>
                 <p id="blockStatsExplanation" style="color: #555; margin-bottom: 12px;">Visual summary of mean/median NEWS2 and incidence/prevalence by block.</p>
                 <div style="margin-bottom: 12px;">
-                    <button id="toggleBlockStatsBtn" onclick="toggleBlockStatsChart()" style="padding: 8px 14px; background: #667eea; color: #fff; border: none; border-radius: 6px; cursor: pointer; font-weight: 600;">Show Statistics Chart</button>
+                    <button id="toggleBlockStatsBtn" onclick="toggleBlockStatsChart()" style="padding: 6px 14px; background: #374151; color: #fff; border: none; border-radius: 3px; cursor: pointer; font-weight: 500; font-size: 13px;">Show Statistics Chart</button>
                 </div>
                 <div id="blockStatsChartContainer" style="display:none; margin-bottom: 16px; padding: 12px; border: 1px solid #e5e7eb; border-radius: 8px; background: #fafafa;">
                     <div style="position: relative; height: 320px;">
@@ -267,7 +264,7 @@
             </div>
 
             <div class="data-section">
-                <h2 class="section-title">👥 Recent Patients</h2>
+                <h2 class="section-title">Recent Patients</h2>
                 <table>
                     <thead>
                         <tr>
@@ -283,14 +280,32 @@
             </div>
 
             <div class="data-section">
-                <h2 class="section-title">🧠 Socioeconomic Cluster Profiles (K-Means)</h2>
-                <p style="color: #666; margin-bottom: 15px;">Block-level clustering on standardized features (HR, SBP, age, sex, active conditions), visualized with PCA.</p>
+                <h2 class="section-title">Socioeconomic Cluster Profiles (K-Means)</h2>
+                <p style="color: #666; margin-bottom: 15px;">Block-level clustering on 4 continuous features (HR, SBP, age, active conditions). Sex reported as demographic descriptor per cluster.</p>
+                <p style="color: #6b7280; margin-bottom: 10px; font-size: 12px;">Interpretation note: these cluster labels summarize all four variables together. Lower systolic BP is not automatically better here, because SBP below 100 mmHg is treated as hypotension risk.</p>
                 <p id="clusterQuality" style="color: #444; margin-bottom: 12px; font-size: 13px;"></p>
                 <div style="margin-bottom: 12px;">
-                    <button id="toggleKmeansGraphBtn" onclick="toggleKMeansGraph()" style="padding: 8px 14px; background: #667eea; color: #fff; border: none; border-radius: 6px; cursor: pointer; font-weight: 600;">Show K-Means Graph</button>
+                    <button id="toggleKmeansGraphBtn" onclick="toggleKMeansGraph()" style="padding: 6px 14px; background: #374151; color: #fff; border: none; border-radius: 3px; cursor: pointer; font-weight: 500; font-size: 13px;">Show Cluster Scatter Plots</button>
                 </div>
-                <div id="kmeansGraphContainer" style="display:none; margin-bottom: 16px; padding: 12px; border: 1px solid #e5e7eb; border-radius: 8px; background: #fafafa;">
-                    <canvas id="kmeansClusterChart" height="120"></canvas>
+                <div id="kmeansGraphContainer" style="display:none; margin-bottom: 16px; padding: 16px; border: 1px solid #d1d5db; border-radius: 4px; background: #ffffff;">
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 16px;">
+                        <div style="border: 1px solid #d1d5db; border-radius: 3px; padding: 12px; background: #fff;">
+                            <canvas id="scatterBpAge" height="200"></canvas>
+                        </div>
+                        <div style="border: 1px solid #d1d5db; border-radius: 3px; padding: 12px; background: #fff;">
+                            <canvas id="scatterCondAge" height="200"></canvas>
+                        </div>
+                        <div style="border: 1px solid #d1d5db; border-radius: 3px; padding: 12px; background: #fff;">
+                            <canvas id="scatterHrAge" height="200"></canvas>
+                        </div>
+                        <div style="border: 1px solid #d1d5db; border-radius: 3px; padding: 12px; background: #fff;">
+                            <p id="pcaChartTitle" style="margin: 0 0 4px 0; font-size: 11px; color: #4b5563; text-align: center; font-weight: 500;">PCA Summary</p>
+                            <canvas id="scatterPca" height="190"></canvas>
+                        </div>
+                    </div>
+                    <div style="border: 1px solid #d1d5db; border-radius: 3px; padding: 12px; background: #fff;">
+                        <canvas id="chartSexDist" height="100"></canvas>
+                    </div>
                 </div>
                 <table>
                     <thead>
@@ -312,7 +327,7 @@
             </div>
 
             <div class="data-section">
-                <h2 class="section-title">🩺 Active Conditions</h2>
+                <h2 class="section-title">Active Conditions</h2>
                 <table>
                     <thead>
                         <tr>
@@ -327,7 +342,7 @@
             </div>
 
             <div class="data-section">
-                <h2 class="section-title">💓 Vital Sign Averages</h2>
+                <h2 class="section-title">Vital Sign Averages</h2>
                 <table>
                     <thead>
                         <tr>
@@ -356,9 +371,14 @@
         let autoRefreshInterval;
         let chartInstances = {}; // Store chart instances for updates
         let kmeansChart = null;
+        let scatterCharts = {};
         let blockStatsChart = null;
         let latestClusters = [];
         let latestClusterPoints = [];
+        let latestVariancePc1 = 0;
+        let latestVariancePc2 = 0;
+        let latestPc1Loadings = [];
+        let latestPc2Loadings = [];
         let latestLocationStats = [];
         let hasLoadedOnce = false;
         let dashboardRefreshInFlight = false;
@@ -374,7 +394,7 @@
             const opening = container.style.display === 'none';
 
             container.style.display = opening ? 'block' : 'none';
-            button.textContent = opening ? 'Hide K-Means Graph' : 'Show K-Means Graph';
+            button.textContent = opening ? 'Hide Cluster Scatter Plots' : 'Show Cluster Scatter Plots';
 
             if (opening) {
                 renderKMeansGraph(latestClusters, latestClusterPoints);
@@ -404,100 +424,243 @@
         }
 
         function renderKMeansGraph(clusters, clusterPoints) {
-            const canvas = document.getElementById('kmeansClusterChart');
-            const ctx = canvas.getContext('2d');
-
-            if (kmeansChart) {
-                kmeansChart.destroy();
-                kmeansChart = null;
-            }
-
             if ((!clusters || clusters.length === 0) && (!clusterPoints || clusterPoints.length === 0)) {
                 return;
             }
 
+            // Muted, academic palette (Tableau-inspired)
             const palette = [
-                'rgba(102, 126, 234, 0.7)',
-                'rgba(16, 185, 129, 0.7)',
-                'rgba(245, 158, 11, 0.7)',
-                'rgba(239, 68, 68, 0.7)',
-                'rgba(168, 85, 247, 0.7)',
-                'rgba(14, 165, 233, 0.7)'
+                'rgba(31, 119, 180, 0.55)',   // steel blue
+                'rgba(44, 160, 44, 0.55)',     // forest green
+                'rgba(214, 39, 40, 0.55)',     // brick red
+                'rgba(148, 103, 189, 0.55)',   // muted purple
+                'rgba(255, 127, 14, 0.55)',    // burnt orange
+                'rgba(140, 86, 75, 0.55)'      // brown
+            ];
+            const paletteSolid = [
+                'rgba(31, 119, 180, 1)',
+                'rgba(44, 160, 44, 1)',
+                'rgba(214, 39, 40, 1)',
+                'rgba(148, 103, 189, 1)',
+                'rgba(255, 127, 14, 1)',
+                'rgba(140, 86, 75, 1)'
             ];
 
+            // Group points by cluster
             const byCluster = new Map();
             (clusterPoints || []).forEach(p => {
-                const clusterId = Number(p.clusterId);
-                if (!Number.isFinite(clusterId)) return;
-                if (!byCluster.has(clusterId)) {
-                    byCluster.set(clusterId, []);
-                }
-                byCluster.get(clusterId).push({
-                    x: Number(p.pc1) || 0,
-                    y: Number(p.pc2) || 0,
-                    r: 4
-                });
+                const cid = Number(p.clusterId);
+                if (!Number.isFinite(cid)) return;
+                if (!byCluster.has(cid)) byCluster.set(cid, []);
+                byCluster.get(cid).push(p);
             });
+            const clusterIds = Array.from(byCluster.keys()).sort((a, b) => a - b);
 
-            const datasets = [];
+            // Professional chart defaults
+            const fontFamily = "'Segoe UI', 'Helvetica Neue', Arial, sans-serif";
+            const axisColor = '#374151';
+            const tickColor = '#6b7280';
+            const gridColor = 'rgba(0,0,0,0.05)';
 
-            (clusterPoints && clusterPoints.length > 0 ? Array.from(byCluster.keys()).sort((a, b) => a - b) : (clusters || []).map(c => c.clusterId)).forEach((clusterId, idx) => {
-                const color = palette[idx % palette.length];
-                const points = byCluster.get(clusterId) || [];
-                if (points.length > 0) {
-                    datasets.push({
-                        label: `C${clusterId} points`,
-                        data: points,
-                        backgroundColor: color,
-                        borderColor: color.replace('0.7', '1'),
-                        borderWidth: 1
-                    });
-                }
-
-                const centroid = (clusters || []).find(c => Number(c.clusterId) === Number(clusterId));
-                if (centroid) {
-                    datasets.push({
-                        label: `C${clusterId} centroid`,
-                        data: [{
-                            x: Number(centroid.pc1) || 0,
-                            y: Number(centroid.pc2) || 0,
-                            r: Math.max(8, Math.min(20, (Number(centroid.patientCount) || 1) * 0.8))
-                        }],
-                        backgroundColor: color.replace('0.7', '1'),
-                        borderColor: '#111827',
-                        borderWidth: 2
-                    });
-                }
-            });
-
-            kmeansChart = new Chart(ctx, {
-                type: 'bubble',
-                data: { datasets },
-                options: {
+            function scatterOpts(xLabel, yLabel, titleText) {
+                return {
                     responsive: true,
                     maintainAspectRatio: true,
+                    animation: false,
                     plugins: {
-                        legend: { position: 'bottom' },
+                        title: {
+                            display: !!titleText,
+                            text: titleText || '',
+                            font: { size: 12, weight: '600', family: fontFamily },
+                            color: '#1f2937',
+                            padding: { bottom: 6 }
+                        },
+                        legend: {
+                            position: 'bottom',
+                            labels: {
+                                font: { size: 9, family: fontFamily },
+                                padding: 6,
+                                usePointStyle: true,
+                                pointStyle: 'circle',
+                                boxWidth: 6,
+                                filter: function(item) { return !item.text.includes(' avg'); }
+                            }
+                        },
                         tooltip: {
+                            backgroundColor: 'rgba(17,24,39,0.9)',
+                            titleFont: { size: 10, family: fontFamily },
+                            bodyFont: { size: 10, family: fontFamily },
+                            padding: 6,
+                            cornerRadius: 2,
+                            displayColors: false,
                             callbacks: {
-                                label: function(context) {
-                                    const ds = context.dataset || {};
-                                    const raw = context.raw || {};
-                                    return `${ds.label}: PC1=${toFixedSafe(raw.x, 2)}, PC2=${toFixedSafe(raw.y, 2)}`;
+                                label: function(ctx) {
+                                    return ctx.dataset.label + ': (' + toFixedSafe(ctx.raw.x, 1) + ', ' + toFixedSafe(ctx.raw.y, 1) + ')';
                                 }
                             }
                         }
                     },
                     scales: {
                         x: {
-                            title: { display: true, text: 'PC1' }
+                            title: { display: true, text: xLabel, font: { size: 10, weight: '500', family: fontFamily }, color: axisColor },
+                            grid: { color: gridColor, drawBorder: false },
+                            ticks: { font: { size: 9, family: fontFamily }, color: tickColor },
+                            border: { color: '#d1d5db' }
                         },
                         y: {
-                            title: { display: true, text: 'PC2' }
+                            title: { display: true, text: yLabel, font: { size: 10, weight: '500', family: fontFamily }, color: axisColor },
+                            grid: { color: gridColor, drawBorder: false },
+                            ticks: { font: { size: 9, family: fontFamily }, color: tickColor },
+                            border: { color: '#d1d5db' }
                         }
                     }
+                };
+            }
+
+            // Build datasets for a scatter chart
+            function makeScatterDatasets(xField, yField) {
+                const datasets = [];
+                clusterIds.forEach((cid, idx) => {
+                    const pts = (byCluster.get(cid) || []).map(p => ({
+                        x: Number(p[xField]) || 0,
+                        y: Number(p[yField]) || 0,
+                        r: 3
+                    }));
+                    if (pts.length > 0) {
+                        datasets.push({
+                            label: 'Cluster ' + cid,
+                            data: pts,
+                            backgroundColor: palette[idx % palette.length],
+                            borderColor: paletteSolid[idx % palette.length],
+                            borderWidth: 0.6
+                        });
+                    }
+                    const centroid = (clusters || []).find(c => Number(c.clusterId) === cid);
+                    if (centroid) {
+                        const cm = {
+                            pc1: Number(centroid.pc1) || 0, pc2: Number(centroid.pc2) || 0,
+                            heartRate: Number(centroid.avgHeartRate) || 0,
+                            systolicPressure: Number(centroid.avgSystolicPressure) || 0,
+                            age: Number(centroid.avgAge) || 0,
+                            activeConditions: Number(centroid.avgConditions) || 0
+                        };
+                        datasets.push({
+                            label: 'C' + cid + ' avg',
+                            data: [{ x: cm[xField] || 0, y: cm[yField] || 0, r: 6 }],
+                            backgroundColor: paletteSolid[idx % palette.length],
+                            borderColor: '#111827',
+                            borderWidth: 1.5,
+                            pointStyle: 'crossRot'
+                        });
+                    }
+                });
+                return datasets;
+            }
+
+            // Update existing chart or create new one (prevents blink)
+            function upsertChart(key, canvasId, type, data, options) {
+                if (scatterCharts[key]) {
+                    scatterCharts[key].data = data;
+                    scatterCharts[key].options = options;
+                    scatterCharts[key].update('none');
+                } else {
+                    const canvas = document.getElementById(canvasId);
+                    if (!canvas) return;
+                    scatterCharts[key] = new Chart(canvas.getContext('2d'), { type, data, options });
                 }
-            });
+            }
+
+            // Build PCA axis label from loadings
+            function pcaAxisLabel(pcName, variance, loadings) {
+                if (!loadings || loadings.length === 0) return pcName;
+                const sorted = loadings.slice().sort((a, b) => Math.abs(b.loading) - Math.abs(a.loading));
+                const top = sorted.slice(0, 2).map(l => l.feature + ' ' + (l.loading >= 0 ? '+' : '') + toFixedSafe(l.loading, 2));
+                return pcName + ' (' + toFixedSafe(variance, 1) + '%) [' + top.join(', ') + ']';
+            }
+
+            // 1. Systolic BP vs Age
+            upsertChart('scatterBpAge', 'scatterBpAge', 'bubble',
+                { datasets: makeScatterDatasets('systolicPressure', 'age') },
+                scatterOpts('Systolic BP (mmHg)', 'Age (years)', 'Systolic BP \u00d7 Age'));
+
+            // 2. Active Conditions vs Age
+            upsertChart('scatterCondAge', 'scatterCondAge', 'bubble',
+                { datasets: makeScatterDatasets('activeConditions', 'age') },
+                scatterOpts('Active Conditions', 'Age (years)', 'Conditions \u00d7 Age'));
+
+            // 3. Heart Rate vs Age
+            upsertChart('scatterHrAge', 'scatterHrAge', 'bubble',
+                { datasets: makeScatterDatasets('heartRate', 'age') },
+                scatterOpts('Heart Rate (bpm)', 'Age (years)', 'Heart Rate \u00d7 Age'));
+
+            // 4. PCA Summary with loading-annotated axes
+            const pc1Label = pcaAxisLabel('PC1', latestVariancePc1, latestPc1Loadings);
+            const pc2Label = pcaAxisLabel('PC2', latestVariancePc2, latestPc2Loadings);
+            const pcaTitle = document.getElementById('pcaChartTitle');
+            if (pcaTitle) {
+                pcaTitle.textContent = 'PCA — ' + toFixedSafe(latestVariancePc1 + latestVariancePc2, 1) + '% total variance explained';
+            }
+            upsertChart('scatterPca', 'scatterPca', 'bubble',
+                { datasets: makeScatterDatasets('pc1', 'pc2') },
+                scatterOpts(pc1Label, pc2Label, null));
+
+            // 5. Sex Distribution (grouped bar — full width)
+            if (clusters && clusters.length > 0) {
+                const barOpts = {
+                    responsive: true,
+                    maintainAspectRatio: true,
+                    animation: false,
+                    plugins: {
+                        title: {
+                            display: true,
+                            text: 'Sex Distribution per Cluster',
+                            font: { size: 12, weight: '600', family: fontFamily },
+                            color: '#1f2937',
+                            padding: { bottom: 4 }
+                        },
+                        legend: {
+                            position: 'bottom',
+                            labels: {
+                                font: { size: 9, family: fontFamily },
+                                padding: 6,
+                                usePointStyle: true,
+                                pointStyle: 'rect',
+                                boxWidth: 8
+                            }
+                        },
+                        tooltip: {
+                            backgroundColor: 'rgba(17,24,39,0.9)',
+                            bodyFont: { size: 10, family: fontFamily },
+                            padding: 6,
+                            cornerRadius: 2,
+                            displayColors: false,
+                            callbacks: { label: function(ctx) { return ctx.dataset.label + ': ' + toFixedSafe(ctx.raw, 1) + '%'; } }
+                        }
+                    },
+                    scales: {
+                        x: {
+                            title: { display: true, text: 'Cluster', font: { size: 10, weight: '500', family: fontFamily }, color: axisColor },
+                            grid: { display: false },
+                            ticks: { font: { size: 9, family: fontFamily }, color: tickColor },
+                            border: { color: '#d1d5db' }
+                        },
+                        y: {
+                            title: { display: true, text: 'Percentage (%)', font: { size: 10, weight: '500', family: fontFamily }, color: axisColor },
+                            grid: { color: gridColor, drawBorder: false },
+                            ticks: { font: { size: 9, family: fontFamily }, color: tickColor },
+                            border: { color: '#d1d5db' },
+                            min: 0, max: 100
+                        }
+                    }
+                };
+                upsertChart('chartSexDist', 'chartSexDist', 'bar', {
+                    labels: clusters.map(c => 'Cluster ' + c.clusterId),
+                    datasets: [
+                        { label: 'Male %', data: clusters.map(c => Number(c.pctMale) || 0), backgroundColor: 'rgba(31,119,180,0.6)', borderColor: 'rgba(31,119,180,1)', borderWidth: 1, borderRadius: 1 },
+                        { label: 'Female %', data: clusters.map(c => Number(c.pctFemale) || 0), backgroundColor: 'rgba(214,39,40,0.6)', borderColor: 'rgba(214,39,40,1)', borderWidth: 1, borderRadius: 1 }
+                    ]
+                }, barOpts);
+            }
         }
 
         function renderBlockStatsVisual(locationStats) {
@@ -622,7 +785,7 @@
 
         async function loadDashboard(options = {}) {
             const { showLoading = false } = options;
-            const blockFilter = document.getElementById('blockFilter').value.trim();
+            const blockFilter = '';
             const loading = document.getElementById('loading');
             const error = document.getElementById('error');
             const content = document.getElementById('content');
@@ -693,7 +856,6 @@
             // Update summary stats
             document.getElementById('totalPatients').textContent = data.totalPatients || 0;
             document.getElementById('totalConditions').textContent = data.totalConditions || 0;
-            document.getElementById('totalAverages').textContent = data.totalAverages || 0;
             document.getElementById('avgNews2').textContent = toFixedSafe(data.avgNews2Score ?? 0, 1);
 
             // Render location stats
@@ -758,6 +920,10 @@
             const clusterPoints = data.socioeconomicAnalysis?.clusterPoints || [];
             latestClusters = clusters;
             latestClusterPoints = clusterPoints;
+            latestVariancePc1 = Number(data.socioeconomicAnalysis?.varianceExplainedPc1) || 0;
+            latestVariancePc2 = Number(data.socioeconomicAnalysis?.varianceExplainedPc2) || 0;
+            latestPc1Loadings = data.socioeconomicAnalysis?.pc1Loadings || [];
+            latestPc2Loadings = data.socioeconomicAnalysis?.pc2Loadings || [];
             const q = data.socioeconomicAnalysis?.quality;
             if (q) {
                 const warn = q.lowConfidence ? ` ⚠ low confidence (min ${toFixedSafe(q.minSilhouette, 3)})` : ' ✓ acceptable';
