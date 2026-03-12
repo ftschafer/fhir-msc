@@ -1,16 +1,33 @@
-version: "3"
 services:
   hapi-fhir-jpaserver-start:
-    build: .
+    build:
+      # Build from current local workspace
+      context: "."
+      dockerfile: "Dockerfile"
     container_name: hapi-fhir-jpaserver-start
     restart: on-failure
     environment:
-      SPRING_DATASOURCE_URL: "jdbc:postgresql://hapi-fhir-postgres:5432/hapi"
-      SPRING_DATASOURCE_USERNAME: "admin"
-      SPRING_DATASOURCE_PASSWORD: "admin"
-      SPRING_DATASOURCE_DRIVERCLASSNAME: "org.postgresql.Driver"
+      # Database
+      SPRING_DATASOURCE_URL: "${SPRING_DATASOURCE_URL:-jdbc:postgresql://hapi-fhir-postgres:5432/hapi}"
+      SPRING_DATASOURCE_USERNAME: "${SPRING_DATASOURCE_USERNAME:-admin}"
+      SPRING_DATASOURCE_PASSWORD: "${SPRING_DATASOURCE_PASSWORD:-admin}"
+      SPRING_DATASOURCE_DRIVERCLASSNAME: "${SPRING_DATASOURCE_DRIVERCLASSNAME:-org.postgresql.Driver}"
+
+      # Location layer
+      HAPI_FHIR_LOCATION_BLOCK: "${HAPI_FHIR_LOCATION_BLOCK:-B71}"
+
+      # Socioeconomic analysis / income configuration
+      HAPI_FHIR_ANALYSIS_SOCIOECONOMIC_INCOME_EXTENSION_URL: "${HAPI_FHIR_ANALYSIS_SOCIOECONOMIC_INCOME_EXTENSION_URL:-http://average-income}"
+      HAPI_FHIR_ANALYSIS_SOCIOECONOMIC_FIXED_BLOCK_INCOME: "${HAPI_FHIR_ANALYSIS_SOCIOECONOMIC_FIXED_BLOCK_INCOME:-3200}"
+
+      # Block health measure report metadata
+      HAPI_FHIR_MEASURE_REPORT_BLOCK_HEALTH_AVG_INCOME: "${HAPI_FHIR_MEASURE_REPORT_BLOCK_HEALTH_AVG_INCOME:-3200}"
+      HAPI_FHIR_MEASURE_REPORT_BLOCK_HEALTH_CARE_UNITS: "${HAPI_FHIR_MEASURE_REPORT_BLOCK_HEALTH_CARE_UNITS:-4}"
+
+      # Forwarding target (set empty to disable in code, or point to another FHIR base URL)
+      UPSTREAM_FHIR_BASE_URL: "${UPSTREAM_FHIR_BASE_URL:-http://localhost:8081/fhir}"
     ports:
-      - "8080:8080"
+      - "8071:8071"
   hapi-fhir-postgres:
     image: postgres:15-alpine
     container_name: hapi-fhir-postgres

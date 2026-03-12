@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1.6
 FROM docker.io/library/maven:3.9.9-eclipse-temurin-17 AS build-hapi
 WORKDIR /tmp/hapi-fhir-jpaserver-starter
 
@@ -6,13 +7,16 @@ RUN curl -LSsO https://github.com/open-telemetry/opentelemetry-java-instrumentat
 
 COPY pom.xml .
 COPY server.xml .
-RUN mvn -ntp dependency:go-offline
+RUN --mount=type=cache,target=/root/.m2,sharing=locked \
+    mvn -ntp dependency:go-offline
 
 COPY src/ /tmp/hapi-fhir-jpaserver-starter/src/
-RUN mvn clean install -DskipTests -Djdk.lang.Process.launchMechanism=vfork
+RUN --mount=type=cache,target=/root/.m2,sharing=locked \
+    mvn clean install -DskipTests -Djdk.lang.Process.launchMechanism=vfork
 
 FROM build-hapi AS build-distroless
-RUN mvn package -DskipTests spring-boot:repackage -Pboot
+RUN --mount=type=cache,target=/root/.m2,sharing=locked \
+    mvn package -DskipTests spring-boot:repackage -Pboot
 RUN mkdir /app && cp /tmp/hapi-fhir-jpaserver-starter/target/ROOT.war /app/main.war
 
 

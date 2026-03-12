@@ -27,6 +27,7 @@ import ca.uhn.fhir.rest.annotation.OperationParam;
 import ca.uhn.fhir.rest.api.server.IBundleProvider;
 import ca.uhn.fhir.rest.param.TokenParam;
 import ca.uhn.fhir.rest.server.IResourceProvider;
+import io.micrometer.core.instrument.Timer;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.PersistenceContext;
 import jakarta.servlet.http.HttpServletRequest;
@@ -54,9 +55,12 @@ public class DashboardProvider implements IResourceProvider {
     private static final long CACHE_DURATION_MS = 3000;
     private static final int BOOTSTRAP_SAMPLES = 300;
 
-    public DashboardProvider(DaoRegistry daoRegistry, BlockSocioeconomicAnalysisService socioeconomicAnalysisService) {
+    private final PerfMetricsService perfMetrics;
+
+    public DashboardProvider(DaoRegistry daoRegistry, BlockSocioeconomicAnalysisService socioeconomicAnalysisService, PerfMetricsService perfMetrics) {
         this.daoRegistry = daoRegistry;
         this.socioeconomicAnalysisService = socioeconomicAnalysisService;
+        this.perfMetrics = perfMetrics;
     }
 
     @Override
@@ -70,6 +74,7 @@ public class DashboardProvider implements IResourceProvider {
             HttpServletRequest request, 
             HttpServletResponse response) {
         
+        Timer.Sample sample = Timer.start();
         try {
             // Block parameter is intentionally ignored: dashboard always aggregates all
             // patients using the configured block from application.yaml.
@@ -77,6 +82,7 @@ public class DashboardProvider implements IResourceProvider {
             // Check cache
             long now = System.currentTimeMillis();
             if (cachedStats != null && (now - cacheTimestamp) < CACHE_DURATION_MS) {
+                sample.stop(perfMetrics.dashboardTimer);
                 writeJsonResponse(response, cachedStats);
                 return;
             }
@@ -87,10 +93,12 @@ public class DashboardProvider implements IResourceProvider {
             // Update cache
             cachedStats = stats;
             cacheTimestamp = now;
-            
+
+            sample.stop(perfMetrics.dashboardTimer);
             writeJsonResponse(response, stats);
             
         } catch (Exception e) {
+            sample.stop(perfMetrics.dashboardTimer);
             try {
                 response.setStatus(500);
                 response.setContentType("application/json");

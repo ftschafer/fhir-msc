@@ -1,19 +1,5 @@
 package ca.uhn.fhir.jpa.starter.common;
 
-import ca.uhn.fhir.jpa.api.dao.DaoRegistry;
-import ca.uhn.fhir.jpa.api.dao.IFhirResourceDao;
-import ca.uhn.fhir.jpa.searchparam.SearchParameterMap;
-import ca.uhn.fhir.rest.api.server.IBundleProvider;
-import ca.uhn.fhir.rest.param.TokenParam;
-import org.hl7.fhir.instance.model.api.IBaseResource;
-import org.hl7.fhir.r4.model.Condition;
-import org.hl7.fhir.r4.model.DateType;
-import org.hl7.fhir.r4.model.Observation;
-import org.hl7.fhir.r4.model.Patient;
-import org.hl7.fhir.r4.model.Enumerations;
-import org.springframework.beans.factory.annotation.Value;
-import org.springframework.stereotype.Service;
-
 import java.time.LocalDate;
 import java.time.ZoneId;
 import java.util.ArrayList;
@@ -24,12 +10,29 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Random;
 
+import org.hl7.fhir.instance.model.api.IBaseResource;
+import org.hl7.fhir.r4.model.Condition;
+import org.hl7.fhir.r4.model.DateType;
+import org.hl7.fhir.r4.model.Enumerations;
+import org.hl7.fhir.r4.model.Observation;
+import org.hl7.fhir.r4.model.Patient;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.stereotype.Service;
+
+import ca.uhn.fhir.jpa.api.dao.DaoRegistry;
+import ca.uhn.fhir.jpa.api.dao.IFhirResourceDao;
+import ca.uhn.fhir.jpa.searchparam.SearchParameterMap;
+import ca.uhn.fhir.rest.api.server.IBundleProvider;
+import ca.uhn.fhir.rest.param.TokenParam;
+import io.micrometer.core.instrument.Timer;
+
 @Service
 public class BlockSocioeconomicAnalysisService {
 
     private static final String HEART_RATE_CODE = "8867-4";
     private static final String SYSTOLIC_BP_CODE = "8480-6";
     private final DaoRegistry daoRegistry;
+    private final PerfMetricsService perfMetrics;
 
     @Value("${hapi.fhir.analysis.socioeconomic.kmeans.max-k:6}")
     private int configuredMaxK;
@@ -58,11 +61,14 @@ public class BlockSocioeconomicAnalysisService {
     @Value("${hapi.fhir.analysis.socioeconomic.kmeans.weight-active-conditions:1.2}")
     private double weightActiveConditions;
 
-    public BlockSocioeconomicAnalysisService(DaoRegistry daoRegistry) {
+    public BlockSocioeconomicAnalysisService(DaoRegistry daoRegistry, PerfMetricsService perfMetrics) {
         this.daoRegistry = daoRegistry;
+        this.perfMetrics = perfMetrics;
     }
 
     public AnalysisOutput analyze(List<Patient> patients, String filterBlock, String defaultBlock) {
+        Timer.Sample sample = Timer.start();
+        try {
         if (patients == null || patients.isEmpty()) {
             return AnalysisOutput.empty();
         }
@@ -123,9 +129,14 @@ public class BlockSocioeconomicAnalysisService {
         return new AnalysisOutput(rows.size(), selected.k, profiles, points, quality,
                 round(pcaResult.varianceExplainedPc1), round(pcaResult.varianceExplainedPc2),
                 pcaResult.pc1Loadings, pcaResult.pc2Loadings);
+        } finally {
+            sample.stop(perfMetrics.kmeansAnalyzeTimer);
+        }
     }
 
     private KMeansSelectionResult selectBestModel(List<double[]> standardizedFeatures) {
+        Timer.Sample sample = Timer.start();
+        try {
         int n = standardizedFeatures.size();
         if (n < 2) {
             return new KMeansSelectionResult(1, new int[]{0}, 0.0, 0.0, 0.0, 1, 1, 0, false);
@@ -140,6 +151,7 @@ public class BlockSocioeconomicAnalysisService {
 
         for (int k = 2; k <= maxK; k++) {
             for (int run = 0; run < runs; run++) {
+                perfMetrics.kmeansIterationCounter.increment();
                 KMeansResult result = runKMeans(standardizedFeatures, k, 12345L + (31L * k) + run);
                 double silhouette = silhouette(result.assignment, standardizedFeatures, k);
                 ClusterShape shape = evaluateClusterShape(result.assignment, k);
@@ -182,6 +194,9 @@ public class BlockSocioeconomicAnalysisService {
             return fallbackBest;
         }
         return new KMeansSelectionResult(1, new int[n], 0.0, 0.0, 0.0, 1, n, 0, false);
+        } finally {
+            sample.stop(perfMetrics.kmeansSelectModelTimer);
+        }
     }
 
     private ClusterShape evaluateClusterShape(int[] assignment, int k) {

@@ -23,8 +23,11 @@ public class InterceptorConfiguration {
     @Autowired
     private FhirContext fhirContext;
 
+    @Autowired
+    private PerfMetricsService perfMetrics;
+
     @Bean
     public PatientTotalNews2ScoreInterceptor patientTotalNews2ScoreInterceptor() {
-        return new PatientTotalNews2ScoreInterceptor(daoRegistry, fhirContext);
+        return new PatientTotalNews2ScoreInterceptor(daoRegistry, fhirContext, perfMetrics);
     }
 }

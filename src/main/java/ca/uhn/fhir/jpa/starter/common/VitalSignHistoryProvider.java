@@ -13,6 +13,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
+import io.micrometer.core.instrument.Timer;
 import ca.uhn.fhir.jpa.starter.cdss.VitalSignHistoryService;
 import ca.uhn.fhir.jpa.starter.cdss.VitalSignHistoryService.TimeSeriesPoint;
 import ca.uhn.fhir.rest.annotation.Operation;
@@ -33,6 +34,9 @@ public class VitalSignHistoryProvider implements IResourceProvider {
     @Autowired
     private VitalSignHistoryService historyService;
 
+    @Autowired
+    private PerfMetricsService perfMetrics;
+
     @Value("${hapi.fhir.location.block:Block-Default}")
     private String currentBlock;
 
@@ -48,6 +52,7 @@ public class VitalSignHistoryProvider implements IResourceProvider {
             HttpServletRequest request, 
             HttpServletResponse response) {
         
+        Timer.Sample sample = Timer.start();
         try {
             String block = (blockParam != null && blockParam.hasValue()) ? blockParam.getValue() : currentBlock;
             int days = daysParam != null ? parseInt(daysParam.getValue(), 30) : 30;
@@ -62,10 +67,12 @@ public class VitalSignHistoryProvider implements IResourceProvider {
             logger.info("Retrieved history for {} vital signs, total data points: {}", 
                        timeSeriesData.size(), 
                        timeSeriesData.values().stream().mapToInt(List::size).sum());
-            
+
+            sample.stop(perfMetrics.vitalHistoryTimer);
             writeJsonResponse(response, timeSeriesData);
             
         } catch (Exception e) {
+            sample.stop(perfMetrics.vitalHistoryTimer);
             try {
                 response.setStatus(500);
                 response.setContentType("application/json");

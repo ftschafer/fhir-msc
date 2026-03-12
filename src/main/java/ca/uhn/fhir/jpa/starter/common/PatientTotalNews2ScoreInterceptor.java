@@ -33,11 +33,13 @@ public class PatientTotalNews2ScoreInterceptor {
 
     private final DaoRegistry daoRegistry;
     private final FhirContext fhirContext;
+    private final PerfMetricsService perfMetrics;
 
     @Autowired
-    public PatientTotalNews2ScoreInterceptor(DaoRegistry daoRegistry, FhirContext fhirContext) {
+    public PatientTotalNews2ScoreInterceptor(DaoRegistry daoRegistry, FhirContext fhirContext, PerfMetricsService perfMetrics) {
         this.daoRegistry = daoRegistry;
         this.fhirContext = fhirContext;
+        this.perfMetrics = perfMetrics;
     }
 
     private IFhirResourceDao<Patient> patientDao() {
@@ -50,8 +52,17 @@ public class PatientTotalNews2ScoreInterceptor {
 
     @Hook(Pointcut.STORAGE_PRECOMMIT_RESOURCE_CREATED)
     public void onObservationCreated(IBaseResource resource, RequestDetails requestDetails, TransactionDetails transactionDetails) {
+        if (resource instanceof Patient) {
+            perfMetrics.recordPatientIngested();
+            return;
+        }
+        if (resource instanceof Condition) {
+            perfMetrics.conditionCreatedCounter.increment();
+            return;
+        }
         if (!(resource instanceof Observation)) return;
 
+        perfMetrics.recordObservationIngested();
         Observation obs = (Observation) resource;
         String patientId = extractPatientId(obs.getSubject());
         if (patientId == null) return;

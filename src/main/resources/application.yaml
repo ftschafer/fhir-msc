@@ -14,7 +14,7 @@ management:
     enabled-by-default: false
     web:
       exposure:
-        include: 'health,info,prometheus' # or e.g. 'info,health,prometheus,metrics' or '*' for all
+        include: 'health,info,prometheus,metrics' # or e.g. 'info,health,prometheus,metrics' or '*' for all
   endpoint:
     info:
       enabled: true
