@@ -76,8 +76,12 @@ public class PatientNews2CurrentBackfillService {
                 }
 
                 em.createNativeQuery(
-                                "MERGE INTO patient_news2_current (patient_id, block_id, news2, updated_at) " +
-                                        "KEY(patient_id) VALUES (?, ?, ?, ?)")
+                        "INSERT INTO patient_news2_current (patient_id, block_id, news2, updated_at) " +
+                            "VALUES (?, ?, ?, ?) " +
+                            "ON CONFLICT (patient_id) DO UPDATE SET " +
+                            "block_id = EXCLUDED.block_id, " +
+                            "news2 = EXCLUDED.news2, " +
+                            "updated_at = EXCLUDED.updated_at")
                         .setParameter(1, patientId)
                         .setParameter(2, block)
                         .setParameter(3, news2)

@@ -153,9 +153,11 @@ public class News2AggregationService {
 
         for (Map.Entry<String, Observation> entry : newest.entrySet()) {
             em.createNativeQuery(
-                            "MERGE INTO news2_agg " +
-                                    "(code, patient_id, obs_instant, news2_value) " +
-                                    "KEY(code, patient_id) VALUES (?, ?, ?, ?)")
+                    "INSERT INTO news2_agg (code, patient_id, obs_instant, news2_value) " +
+                        "VALUES (?, ?, ?, ?) " +
+                        "ON CONFLICT (code, patient_id) DO UPDATE SET " +
+                        "obs_instant = EXCLUDED.obs_instant, " +
+                        "news2_value = EXCLUDED.news2_value")
                     .setParameter(1, entry.getKey())
                     .setParameter(2, patientId)
                     .setParameter(3, java.sql.Timestamp.from(extractInstant(entry.getValue())))
@@ -260,8 +262,12 @@ public class News2AggregationService {
 
     private void upsertPatientNews2Current(String patientId, String block, int news2) {
         em.createNativeQuery(
-                        "MERGE INTO patient_news2_current (patient_id, block_id, news2, updated_at) " +
-                                "KEY(patient_id) VALUES (?, ?, ?, ?)")
+                "INSERT INTO patient_news2_current (patient_id, block_id, news2, updated_at) " +
+                    "VALUES (?, ?, ?, ?) " +
+                    "ON CONFLICT (patient_id) DO UPDATE SET " +
+                    "block_id = EXCLUDED.block_id, " +
+                    "news2 = EXCLUDED.news2, " +
+                    "updated_at = EXCLUDED.updated_at")
                 .setParameter(1, patientId)
                 .setParameter(2, block)
                 .setParameter(3, news2)
