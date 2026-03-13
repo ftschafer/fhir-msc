@@ -12,6 +12,7 @@ services:
       SPRING_DATASOURCE_USERNAME: "${SPRING_DATASOURCE_USERNAME:-admin}"
       SPRING_DATASOURCE_PASSWORD: "${SPRING_DATASOURCE_PASSWORD:-admin}"
       SPRING_DATASOURCE_DRIVERCLASSNAME: "${SPRING_DATASOURCE_DRIVERCLASSNAME:-org.postgresql.Driver}"
+      SPRING_JPA_HIBERNATE_DDL_AUTO: "${SPRING_JPA_HIBERNATE_DDL_AUTO:-update}"
 
       # Location layer
       HAPI_FHIR_LOCATION_BLOCK: "${HAPI_FHIR_LOCATION_BLOCK:-B71}"
@@ -26,6 +27,9 @@ services:
 
       # Forwarding target (set empty to disable in code, or point to another FHIR base URL)
       UPSTREAM_FHIR_BASE_URL: "${UPSTREAM_FHIR_BASE_URL:-http://localhost:8081/fhir}"
+    volumes:
+      - ./custom:/app/custom
+      - ./configs:/app/configs
     ports:
       - "8071:8071"
   hapi-fhir-postgres:
@@ -38,7 +42,5 @@ services:
       POSTGRES_PASSWORD: "admin"
     ports:
       - "5432:5432"
-    volumes:
-      - hapi-fhir-postgres:/var/lib/postgresql/data
-volumes:
-  hapi-fhir-postgres:
+    tmpfs:
+      - /var/lib/postgresql/data

@@ -15,6 +15,7 @@ import org.hl7.fhir.r4.model.Extension;
 import org.hl7.fhir.r4.model.IntegerType;
 import org.hl7.fhir.r4.model.Observation;
 import org.hl7.fhir.r4.model.Patient;
+import org.hl7.fhir.r4.model.Quantity;
 import org.hl7.fhir.r4.model.StringType;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
@@ -298,12 +299,16 @@ public class DashboardProvider implements IResourceProvider {
         vsa.vitalSign = obs.getCode() != null && obs.getCode().hasCoding()
             ? obs.getCode().getCodingFirstRep().getDisplay()
             : "Unknown";
-        vsa.averageValue = obs.getValueQuantity() != null
-            ? obs.getValueQuantity().getValue().doubleValue()
-            : 0;
-        vsa.unit = obs.getValueQuantity() != null
-            ? obs.getValueQuantity().getUnit()
-            : "";
+
+        // Some observations carry non-Quantity value[x] (for example StringType).
+        // Read Quantity fields only when value[x] is actually a Quantity.
+        if (obs.getValue() instanceof Quantity q) {
+            vsa.averageValue = q.getValue() != null ? q.getValue().doubleValue() : 0;
+            vsa.unit = q.getUnit() != null ? q.getUnit() : "";
+        } else {
+            vsa.averageValue = 0;
+            vsa.unit = "";
+        }
 
         Extension sampleExt = obs.getExtensionByUrl("http://observation-sample-count");
         vsa.sampleCount = sampleExt != null && sampleExt.getValue() instanceof IntegerType

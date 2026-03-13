@@ -53,9 +53,9 @@ spring:
     fail-on-missing-locations: false
   datasource:
     # Use localhost when running app on host machine; use hapi-fhir-postgres when app runs in docker.
-    url: jdbc:postgresql://localhost:5432/hapi
-    username: admin
-    password: admin
+    #url: jdbc:postgresql://localhost:5432/hapi
+    #username: admin
+    #password: admin
     driverClassName: org.postgresql.Driver
 
     # database connection pool size

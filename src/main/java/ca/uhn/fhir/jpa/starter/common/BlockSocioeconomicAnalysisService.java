@@ -16,6 +16,7 @@ import org.hl7.fhir.r4.model.DateType;
 import org.hl7.fhir.r4.model.Enumerations;
 import org.hl7.fhir.r4.model.Observation;
 import org.hl7.fhir.r4.model.Patient;
+import org.hl7.fhir.r4.model.Quantity;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
@@ -649,7 +650,7 @@ public class BlockSocioeconomicAnalysisService {
 
         IBundleProvider results = observationDao.search(search);
         for (IBaseResource resource : results.getAllResources()) {
-            if (!(resource instanceof Observation observation) || observation.getSubject() == null || observation.getValueQuantity() == null) {
+            if (!(resource instanceof Observation observation) || observation.getSubject() == null || !(observation.getValue() instanceof Quantity)) {
                 continue;
             }
 
@@ -686,8 +687,14 @@ public class BlockSocioeconomicAnalysisService {
                 continue;
             }
 
-            int heartRate = hrObs.getValueQuantity().getValue() != null ? hrObs.getValueQuantity().getValue().intValue() : 0;
-            int systolicPressure = sbpObs.getValueQuantity().getValue() != null ? sbpObs.getValueQuantity().getValue().intValue() : 0;
+            Quantity hrQty = hrObs.getValue() instanceof Quantity q ? q : null;
+            Quantity sbpQty = sbpObs.getValue() instanceof Quantity q ? q : null;
+            if (hrQty == null || sbpQty == null) {
+                continue;
+            }
+
+            int heartRate = hrQty.getValue() != null ? hrQty.getValue().intValue() : 0;
+            int systolicPressure = sbpQty.getValue() != null ? sbpQty.getValue().intValue() : 0;
             if (heartRate <= 0 || systolicPressure <= 0) {
                 continue;
             }
