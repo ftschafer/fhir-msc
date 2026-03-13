@@ -14,7 +14,7 @@ management:
     enabled-by-default: false
     web:
       exposure:
-        include: 'health,info,prometheus' # or e.g. 'info,health,prometheus,metrics' or '*' for all
+        include: 'health,info,prometheus,metrics' # or e.g. 'info,health,prometheus,metrics' or '*' for all
   endpoint:
     info:
       enabled: true
@@ -38,8 +38,7 @@ management:
 spring:
   h2:
     console:
-      enabled: true
-      path: /h2-console
+      enabled: false
   main:
     allow-circular-references: true
   devtools:
@@ -53,22 +52,17 @@ spring:
     baselineOnMigrate: true
     fail-on-missing-locations: false
   datasource:
-    # url: jdbc:postgresql://hapi-fhir-postgres:5432/hapi
-    # username: admin
-    # password: admin
-    # driverClassName: org.postgresql.Driver
-    # max-active: 15
-
-    url: jdbc:h2:mem:test_mem
-    username: sa
-    password: null
-    driverClassName: org.h2.Driver
-    max-active: 15
+    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5432/hapi}
+    username: ${SPRING_DATASOURCE_USERNAME:admin}
+    password: ${SPRING_DATASOURCE_PASSWORD:admin}
+    driverClassName: ${SPRING_DATASOURCE_DRIVER_CLASS_NAME:org.postgresql.Driver}
+    max-active: ${SPRING_DATASOURCE_MAX_ACTIVE:15}
 
     # database connection pool size
     hikari:
       maximum-pool-size: 10
   jpa:
+    database-platform: ${SPRING_JPA_DATABASE_PLATFORM:ca.uhn.fhir.jpa.model.dialect.HapiFhirPostgresDialect}
     properties:
       hibernate.format_sql: false
       hibernate.show_sql: false
@@ -76,9 +70,8 @@ spring:
       #Hibernate dialect is automatically detected except Postgres and H2.
       #If using H2, then supply the value of ca.uhn.fhir.jpa.model.dialect.HapiFhirH2Dialect
       #If using postgres, then supply the value of ca.uhn.fhir.jpa.model.dialect.HapiFhirPostgresDialect
-      hibernate.dialect: ca.uhn.fhir.jpa.model.dialect.HapiFhirH2Dialect
-      # hibernate.dialect: ca.uhn.fhir.jpa.model.dialect.HapiFhirPostgresDialect
-      hibernate.hbm2ddl.auto: update
+      hibernate.dialect: ${SPRING_JPA_PROPERTIES_HIBERNATE_DIALECT:ca.uhn.fhir.jpa.model.dialect.HapiFhirPostgresDialect}
+      hibernate.hbm2ddl.auto: ${SPRING_JPA_PROPERTIES_HIBERNATE_HBM2DDL_AUTO:update}
   #      hibernate.jdbc.batch_size: 20
   #      hibernate.cache.use_query_cache: false
   #      hibernate.cache.use_second_level_cache: false

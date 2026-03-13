@@ -2,11 +2,11 @@ package ca.uhn.fhir.jpa.starter.common;
 
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.Date;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import java.util.Date;
 
 import org.hl7.fhir.instance.model.api.IBaseResource;
 import org.hl7.fhir.r4.model.Condition;
@@ -28,6 +28,7 @@ import ca.uhn.fhir.rest.annotation.OperationParam;
 import ca.uhn.fhir.rest.api.server.IBundleProvider;
 import ca.uhn.fhir.rest.param.TokenParam;
 import ca.uhn.fhir.rest.server.IResourceProvider;
+import io.micrometer.core.instrument.Timer;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 
@@ -48,9 +49,11 @@ public class DashboardProvider implements IResourceProvider {
     private long cacheTimestamp = 0;
     @Value("${dashboard.cache-ms:5000}")
     private long cacheDurationMs;
+    private final PerfMetricsService perfMetrics;
 
-    public DashboardProvider(DaoRegistry daoRegistry) {
+    public DashboardProvider(DaoRegistry daoRegistry, PerfMetricsService perfMetrics) {
         this.daoRegistry = daoRegistry;
+        this.perfMetrics = perfMetrics;
     }
 
     @Override
@@ -63,7 +66,7 @@ public class DashboardProvider implements IResourceProvider {
             @OperationParam(name = "block") StringType blockParam,
             HttpServletRequest request, 
             HttpServletResponse response) {
-        
+        Timer.Sample sample = Timer.start();
         try {
             String filterBlock = blockParam != null ? blockParam.getValue() : null;
             String requestTs = request.getParameter("_ts");
@@ -72,6 +75,7 @@ public class DashboardProvider implements IResourceProvider {
             // Check cache (only if no filter or matches current block)
             long now = System.currentTimeMillis();
             if (!bypassCache && cachedStats != null && (now - cacheTimestamp) < cacheDurationMs && filterBlock == null) {
+                sample.stop(perfMetrics.dashboardTimer);
                 writeJsonResponse(response, cachedStats);
                 return;
             }
@@ -84,10 +88,12 @@ public class DashboardProvider implements IResourceProvider {
                 cachedStats = stats;
                 cacheTimestamp = now;
             }
-            
+
+            sample.stop(perfMetrics.dashboardTimer);
             writeJsonResponse(response, stats);
             
         } catch (Exception e) {
+            sample.stop(perfMetrics.dashboardTimer);
             try {
                 response.setStatus(500);
                 response.setContentType("application/json");

@@ -1,5 +1,6 @@
 package ca.uhn.fhir.jpa.starter.common;
 
+import io.micrometer.core.instrument.Timer;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.HttpStatus;
@@ -27,6 +28,12 @@ public class BlockNews2AggregateController {
     @PersistenceContext
     private EntityManager em;
 
+    private final PerfMetricsService perfMetrics;
+
+    public BlockNews2AggregateController(PerfMetricsService perfMetrics) {
+        this.perfMetrics = perfMetrics;
+    }
+
     // ── Single block ────────────────────────────────────────────────────────
 
     @GetMapping("/block-average")
@@ -35,18 +42,23 @@ public class BlockNews2AggregateController {
             @RequestParam("neighborhood") String neighborhood,
             @RequestParam("block") String block
     ) {
-        BlockKey key = new BlockKey(REGION, neighborhood, block);
-        BlockNews2Aggregate agg = em.find(BlockNews2Aggregate.class, key);
-        if (agg == null) {
-            return ResponseEntity.status(HttpStatus.NOT_FOUND).body(Map.of(
-                    "neighborhood", neighborhood,
-                    "block", block,
-                    "average", 0.0,
-                    "patientCount", 0,
-                    "totalScore", 0
-            ));
+        Timer.Sample sample = Timer.start();
+        try {
+            BlockKey key = new BlockKey(REGION, neighborhood, block);
+            BlockNews2Aggregate agg = em.find(BlockNews2Aggregate.class, key);
+            if (agg == null) {
+                return ResponseEntity.status(HttpStatus.NOT_FOUND).body(Map.of(
+                        "neighborhood", neighborhood,
+                        "block", block,
+                        "average", 0.0,
+                        "patientCount", 0,
+                        "totalScore", 0
+                ));
+            }
+            return ResponseEntity.ok(toMap(agg));
+        } finally {
+            sample.stop(perfMetrics.cityBlockTimer);
         }
-        return ResponseEntity.ok(toMap(agg));
     }
 
     @GetMapping("/{block}")
@@ -55,14 +67,19 @@ public class BlockNews2AggregateController {
             @PathVariable("block") String block,
             @RequestParam("neighborhood") String neighborhood
     ) {
-        BlockKey key = new BlockKey(REGION, neighborhood, block);
-        BlockNews2Aggregate agg = em.find(BlockNews2Aggregate.class, key);
-        if (agg == null) {
-            return ResponseEntity.status(HttpStatus.NOT_FOUND)
-                    .body(Map.of("block", block, "neighborhood", neighborhood,
-                                 "average", 0.0, "patientCount", 0));
+        Timer.Sample sample = Timer.start();
+        try {
+            BlockKey key = new BlockKey(REGION, neighborhood, block);
+            BlockNews2Aggregate agg = em.find(BlockNews2Aggregate.class, key);
+            if (agg == null) {
+                return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                        .body(Map.of("block", block, "neighborhood", neighborhood,
+                                     "average", 0.0, "patientCount", 0));
+            }
+            return ResponseEntity.ok(toMap(agg));
+        } finally {
+            sample.stop(perfMetrics.cityBlockTimer);
         }
-        return ResponseEntity.ok(toMap(agg));
     }
 
     // ── Neighborhood aggregate ──────────────────────────────────────────────

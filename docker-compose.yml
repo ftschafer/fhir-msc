@@ -1,16 +1,37 @@
-version: "3"
 services:
   hapi-fhir-jpaserver-start:
-    build: .
+    build:
+      # Build from current local workspace
+      context: "."
+      dockerfile: "Dockerfile"
     container_name: hapi-fhir-jpaserver-start
     restart: on-failure
     environment:
-      SPRING_DATASOURCE_URL: "jdbc:postgresql://hapi-fhir-postgres:5432/hapi"
-      SPRING_DATASOURCE_USERNAME: "admin"
-      SPRING_DATASOURCE_PASSWORD: "admin"
-      SPRING_DATASOURCE_DRIVERCLASSNAME: "org.postgresql.Driver"
+      # Database
+      SPRING_DATASOURCE_URL: "${SPRING_DATASOURCE_URL:-jdbc:postgresql://hapi-fhir-postgres:5432/hapi}"
+      SPRING_DATASOURCE_USERNAME: "${SPRING_DATASOURCE_USERNAME:-admin}"
+      SPRING_DATASOURCE_PASSWORD: "${SPRING_DATASOURCE_PASSWORD:-admin}"
+      SPRING_DATASOURCE_DRIVER_CLASS_NAME: "${SPRING_DATASOURCE_DRIVER_CLASS_NAME:-org.postgresql.Driver}"
+      SPRING_JPA_DATABASE_PLATFORM: "${SPRING_JPA_DATABASE_PLATFORM:-ca.uhn.fhir.jpa.model.dialect.HapiFhirPostgresDialect}"
+      SPRING_JPA_PROPERTIES_HIBERNATE_DIALECT: "${SPRING_JPA_PROPERTIES_HIBERNATE_DIALECT:-ca.uhn.fhir.jpa.model.dialect.HapiFhirPostgresDialect}"
+      SPRING_JPA_PROPERTIES_HIBERNATE_HBM2DDL_AUTO: "${SPRING_JPA_PROPERTIES_HIBERNATE_HBM2DDL_AUTO:-update}"
+      SPRING_H2_CONSOLE_ENABLED: "${SPRING_H2_CONSOLE_ENABLED:-false}"
+      SERVER_PORT: "${SERVER_PORT:-8081}"
+
+      # Neighborhood layer for this branch
+      LOCATION_NEIGHBORHOOD: "${LOCATION_NEIGHBORHOOD:-N81}"
+
+      # Forwarding target (set empty to disable in code, or point to another FHIR base URL)
+      UPSTREAM_FHIR_BASE_URL: "${UPSTREAM_FHIR_BASE_URL:-http://localhost:8091/fhir}"
+    depends_on:
+      hapi-fhir-postgres:
+        condition: service_healthy
+    volumes:
+      - ./custom:/app/custom
+      - ./configs:/app/configs
     ports:
-      - "8080:8080"
+      - "8081:8081"
+
   hapi-fhir-postgres:
     image: postgres:15-alpine
     container_name: hapi-fhir-postgres
@@ -19,7 +40,13 @@ services:
       POSTGRES_DB: "hapi"
       POSTGRES_USER: "admin"
       POSTGRES_PASSWORD: "admin"
-    volumes:
-      - hapi-fhir-postgres:/var/lib/postgresql/data
-volumes:
-  hapi-fhir-postgres:
+    ports:
+      - "5432:5432"
+    # Ephemeral DB: data is kept in memory only and reset on container recreation/restart.
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U admin -d hapi"]
+      interval: 5s
+      timeout: 5s
+      retries: 10

@@ -41,10 +41,12 @@ public class ConditionUpstreamForwardingInterceptor {
 
     private final DaoRegistry daoRegistry;
     private final UpstreamForwarder upstreamForwarder;
+    private final PerfMetricsService perfMetrics;
 
-    public ConditionUpstreamForwardingInterceptor(DaoRegistry daoRegistry, UpstreamForwarder upstreamForwarder) {
+    public ConditionUpstreamForwardingInterceptor(DaoRegistry daoRegistry, UpstreamForwarder upstreamForwarder, PerfMetricsService perfMetrics) {
         this.daoRegistry = daoRegistry;
         this.upstreamForwarder = upstreamForwarder;
+        this.perfMetrics = perfMetrics;
     }
 
     @Hook(Pointcut.STORAGE_PRECOMMIT_RESOURCE_CREATED)
@@ -54,6 +56,7 @@ public class ConditionUpstreamForwardingInterceptor {
             return;
         }
         if (resource instanceof Condition condition) {
+            perfMetrics.recordConditionIngested();
             ourLog.info("Condition create detected for upstream forwarding: Condition/{}",
                     normalizeId(condition.getIdElement() != null ? condition.getIdElement().getIdPart() : null));
             enqueueAfterCommit(condition);
@@ -67,6 +70,7 @@ public class ConditionUpstreamForwardingInterceptor {
             return;
         }
         if (newResource instanceof Condition condition) {
+            perfMetrics.recordConditionIngested();
             ourLog.info("Condition update detected for upstream forwarding: Condition/{}",
                     normalizeId(condition.getIdElement() != null ? condition.getIdElement().getIdPart() : null));
             enqueueAfterCommit(condition);

@@ -31,6 +31,7 @@ import ca.uhn.fhir.jpa.api.dao.IFhirResourceDao;
 import ca.uhn.fhir.jpa.searchparam.SearchParameterMap;
 import ca.uhn.fhir.rest.api.server.IBundleProvider;
 import ca.uhn.fhir.rest.param.TokenParam;
+import io.micrometer.core.instrument.Timer;
 import jakarta.transaction.Transactional;
 
 @RestController
@@ -56,12 +57,14 @@ public class BlockCorrelationController {
     private static final int MORAN_PERMUTATIONS = 999;
 
     private final DaoRegistry daoRegistry;
+    private final PerfMetricsService perfMetrics;
 
     @org.springframework.beans.factory.annotation.Value("${location.neighborhood}")
     private String configuredNeighborhood;
 
-    public BlockCorrelationController(DaoRegistry daoRegistry) {
+    public BlockCorrelationController(DaoRegistry daoRegistry, PerfMetricsService perfMetrics) {
         this.daoRegistry = daoRegistry;
+        this.perfMetrics = perfMetrics;
     }
 
     @GetMapping("/block-correlations")
@@ -69,54 +72,61 @@ public class BlockCorrelationController {
     public Map<String, Object> getBlockCorrelations(
         @RequestParam(value = "neighborhood", required = false) String neighborhoodParam
     ) {
-        String neighborhoodFilter = normalize(neighborhoodParam);
-        if (neighborhoodFilter == null) {
-            neighborhoodFilter = normalize(configuredNeighborhood);
-        }
+        perfMetrics.recordCorrelationRequest();
+        Timer.Sample sample = Timer.start();
+        try {
+            String neighborhoodFilter = normalize(neighborhoodParam);
+            if (neighborhoodFilter == null) {
+                neighborhoodFilter = normalize(configuredNeighborhood);
+            }
 
-        Map<String, BlockRow> byBlock = loadBlockRows(neighborhoodFilter);
-        if (byBlock.isEmpty()) {
+            Map<String, BlockRow> byBlock = loadBlockRows(neighborhoodFilter);
+            if (byBlock.isEmpty()) {
+                Map<String, Object> out = new LinkedHashMap<>();
+                out.put("neighborhood", neighborhoodFilter);
+                out.put("blockCount", 0);
+                out.put("message", "No block-level data available for correlation");
+                out.put("correlations", List.of());
+                return out;
+            }
+
+            applyConditionCounts(byBlock);
+            applyBlockNews2(byBlock);
+            applyVitalSignAverages(byBlock);
+
+            List<Map<String, Object>> correlations = new ArrayList<>();
+            correlations.add(correlationResult("careUnits_vs_news2", byBlock, b -> b.careUnits, b -> b.avgNews2));
+            correlations.add(correlationResult("averageIncome_vs_conditions", byBlock, b -> b.averageIncome, b -> asDouble(b.conditionCount)));
+            correlations.add(correlationResult("meanAge_vs_heartRate", byBlock, b -> b.meanAge, b -> b.heartRate));
+            correlations.add(correlationResult("meanAge_vs_systolicBP", byBlock, b -> b.meanAge, b -> b.systolicBp));
+            correlations.add(correlationResult("meanAge_vs_diastolicBP", byBlock, b -> b.meanAge, b -> b.diastolicBp));
+            perfMetrics.recordCorrelationComputations(correlations.size());
+
             Map<String, Object> out = new LinkedHashMap<>();
             out.put("neighborhood", neighborhoodFilter);
-            out.put("blockCount", 0);
-            out.put("message", "No block-level data available for correlation");
-            out.put("correlations", List.of());
+            out.put("blockCount", byBlock.size());
+            out.put("minimumSampleForCorrelation", 3);
+            out.put("correlations", correlations);
+
+            List<Map<String, Object>> rows = new ArrayList<>();
+            for (BlockRow row : byBlock.values()) {
+                Map<String, Object> entry = new LinkedHashMap<>();
+                entry.put("block", row.block);
+                entry.put("averageIncome", row.averageIncome);
+                entry.put("careUnits", row.careUnits);
+                entry.put("meanAge", row.meanAge);
+                entry.put("avgNews2", row.avgNews2);
+                entry.put("conditionCount", row.conditionCount);
+                entry.put("heartRate", row.heartRate);
+                entry.put("systolicBP", row.systolicBp);
+                entry.put("diastolicBP", row.diastolicBp);
+                rows.add(entry);
+            }
+            out.put("blockRows", rows);
             return out;
+        } finally {
+            sample.stop(perfMetrics.blockCorrelationTimer);
         }
-
-        applyConditionCounts(byBlock);
-        applyBlockNews2(byBlock);
-        applyVitalSignAverages(byBlock);
-
-        List<Map<String, Object>> correlations = new ArrayList<>();
-        correlations.add(correlationResult("careUnits_vs_news2", byBlock, b -> b.careUnits, b -> b.avgNews2));
-        correlations.add(correlationResult("averageIncome_vs_conditions", byBlock, b -> b.averageIncome, b -> asDouble(b.conditionCount)));
-        correlations.add(correlationResult("meanAge_vs_heartRate", byBlock, b -> b.meanAge, b -> b.heartRate));
-        correlations.add(correlationResult("meanAge_vs_systolicBP", byBlock, b -> b.meanAge, b -> b.systolicBp));
-        correlations.add(correlationResult("meanAge_vs_diastolicBP", byBlock, b -> b.meanAge, b -> b.diastolicBp));
-
-        Map<String, Object> out = new LinkedHashMap<>();
-        out.put("neighborhood", neighborhoodFilter);
-        out.put("blockCount", byBlock.size());
-        out.put("minimumSampleForCorrelation", 3);
-        out.put("correlations", correlations);
-
-        List<Map<String, Object>> rows = new ArrayList<>();
-        for (BlockRow row : byBlock.values()) {
-            Map<String, Object> entry = new LinkedHashMap<>();
-            entry.put("block", row.block);
-            entry.put("averageIncome", row.averageIncome);
-            entry.put("careUnits", row.careUnits);
-            entry.put("meanAge", row.meanAge);
-            entry.put("avgNews2", row.avgNews2);
-            entry.put("conditionCount", row.conditionCount);
-            entry.put("heartRate", row.heartRate);
-            entry.put("systolicBP", row.systolicBp);
-            entry.put("diastolicBP", row.diastolicBp);
-            rows.add(entry);
-        }
-        out.put("blockRows", rows);
-        return out;
     }
 
     // ── Moran's I — Spatial Autocorrelation ──────────────────────────────
@@ -126,48 +136,55 @@ public class BlockCorrelationController {
     public Map<String, Object> getSpatialAutocorrelation(
         @RequestParam(value = "neighborhood", required = false) String neighborhoodParam
     ) {
-        String neighborhoodFilter = normalize(neighborhoodParam);
-        if (neighborhoodFilter == null) {
-            neighborhoodFilter = normalize(configuredNeighborhood);
-        }
+        perfMetrics.recordSpatialAutocorrelationRequest();
+        Timer.Sample sample = Timer.start();
+        try {
+            String neighborhoodFilter = normalize(neighborhoodParam);
+            if (neighborhoodFilter == null) {
+                neighborhoodFilter = normalize(configuredNeighborhood);
+            }
 
-        Map<String, BlockRow> byBlock = loadBlockRows(neighborhoodFilter);
-        if (byBlock.isEmpty()) {
+            Map<String, BlockRow> byBlock = loadBlockRows(neighborhoodFilter);
+            if (byBlock.isEmpty()) {
+                Map<String, Object> out = new LinkedHashMap<>();
+                out.put("neighborhood", neighborhoodFilter);
+                out.put("blockCount", 0);
+                out.put("message", "No block-level data available for spatial analysis");
+                out.put("variables", List.of());
+                return out;
+            }
+
+            applyConditionCounts(byBlock);
+            applyBlockNews2(byBlock);
+            applyVitalSignAverages(byBlock);
+
+            List<String> blockOrder = new ArrayList<>(byBlock.keySet());
+            double[][] weights = buildSpatialWeights(blockOrder);
+
+            List<Map<String, Object>> variables = new ArrayList<>();
+            variables.add(moranResult("avgNews2", blockOrder, byBlock, b -> b.avgNews2, weights));
+            variables.add(moranResult("conditionCount", blockOrder, byBlock, b -> asDouble(b.conditionCount), weights));
+            variables.add(moranResult("heartRate", blockOrder, byBlock, b -> b.heartRate, weights));
+            variables.add(moranResult("systolicBP", blockOrder, byBlock, b -> b.systolicBp, weights));
+            variables.add(moranResult("diastolicBP", blockOrder, byBlock, b -> b.diastolicBp, weights));
+            variables.add(moranResult("averageIncome", blockOrder, byBlock, b -> b.averageIncome, weights));
+            variables.add(moranResult("careUnits", blockOrder, byBlock, b -> b.careUnits, weights));
+            perfMetrics.recordMoranVariableComputations(variables.size());
+
+            boolean anyClustered = variables.stream()
+                .anyMatch(v -> "clustered".equals(v.get("pattern")));
+
             Map<String, Object> out = new LinkedHashMap<>();
             out.put("neighborhood", neighborhoodFilter);
-            out.put("blockCount", 0);
-            out.put("message", "No block-level data available for spatial analysis");
-            out.put("variables", List.of());
+            out.put("blockCount", byBlock.size());
+            out.put("weightMatrix", "row-standardized contiguity (numeric block adjacency, fallback: full connectivity)");
+            out.put("permutations", MORAN_PERMUTATIONS);
+            out.put("blockLevelInterventionJustified", anyClustered);
+            out.put("variables", variables);
             return out;
+        } finally {
+            sample.stop(perfMetrics.spatialAutocorrelationTimer);
         }
-
-        applyConditionCounts(byBlock);
-        applyBlockNews2(byBlock);
-        applyVitalSignAverages(byBlock);
-
-        List<String> blockOrder = new ArrayList<>(byBlock.keySet());
-        double[][] weights = buildSpatialWeights(blockOrder);
-
-        List<Map<String, Object>> variables = new ArrayList<>();
-        variables.add(moranResult("avgNews2", blockOrder, byBlock, b -> b.avgNews2, weights));
-        variables.add(moranResult("conditionCount", blockOrder, byBlock, b -> asDouble(b.conditionCount), weights));
-        variables.add(moranResult("heartRate", blockOrder, byBlock, b -> b.heartRate, weights));
-        variables.add(moranResult("systolicBP", blockOrder, byBlock, b -> b.systolicBp, weights));
-        variables.add(moranResult("diastolicBP", blockOrder, byBlock, b -> b.diastolicBp, weights));
-        variables.add(moranResult("averageIncome", blockOrder, byBlock, b -> b.averageIncome, weights));
-        variables.add(moranResult("careUnits", blockOrder, byBlock, b -> b.careUnits, weights));
-
-        boolean anyClustered = variables.stream()
-            .anyMatch(v -> "clustered".equals(v.get("pattern")));
-
-        Map<String, Object> out = new LinkedHashMap<>();
-        out.put("neighborhood", neighborhoodFilter);
-        out.put("blockCount", byBlock.size());
-        out.put("weightMatrix", "row-standardized contiguity (numeric block adjacency, fallback: full connectivity)");
-        out.put("permutations", MORAN_PERMUTATIONS);
-        out.put("blockLevelInterventionJustified", anyClustered);
-        out.put("variables", variables);
-        return out;
     }
 
     /**

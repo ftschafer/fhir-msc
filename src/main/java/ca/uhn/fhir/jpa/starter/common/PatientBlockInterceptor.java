@@ -15,21 +15,29 @@ public class PatientBlockInterceptor {
     private static final String INTERNAL_REQUEST_HEADER = "X-Upstream-Internal-Request";
 
     private final PatientEventQueue queue;
+    private final PerfMetricsService perfMetrics;
 
-    public PatientBlockInterceptor(PatientEventQueue queue) {
+    public PatientBlockInterceptor(PatientEventQueue queue, PerfMetricsService perfMetrics) {
         this.queue = queue;
+        this.perfMetrics = perfMetrics;
     }
 
     @Hook(Pointcut.STORAGE_PRECOMMIT_RESOURCE_CREATED)
     public void created(IBaseResource resource, RequestDetails requestDetails) {
         if (isInternalRequest(requestDetails)) return;
-        if (resource instanceof Patient p) enqueueAfterCommit(p);
+        if (resource instanceof Patient p) {
+            perfMetrics.recordPatientIngested();
+            enqueueAfterCommit(p);
+        }
     }
 
     @Hook(Pointcut.STORAGE_PRECOMMIT_RESOURCE_UPDATED)
     public void updated(IBaseResource oldRes, IBaseResource newRes, RequestDetails requestDetails) {
         if (isInternalRequest(requestDetails)) return;
-        if (newRes instanceof Patient p) enqueueAfterCommit(p);
+        if (newRes instanceof Patient p) {
+            perfMetrics.recordPatientIngested();
+            enqueueAfterCommit(p);
+        }
     }
 
     private boolean isInternalRequest(RequestDetails requestDetails) {

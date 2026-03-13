@@ -6,14 +6,10 @@ RUN curl -LSsO https://github.com/open-telemetry/opentelemetry-java-instrumentat
 
 COPY pom.xml .
 COPY server.xml .
-RUN mvn -ntp dependency:go-offline
+RUN mvn -ntp -DskipTests dependency:go-offline
 
 COPY src/ /tmp/hapi-fhir-jpaserver-starter/src/
-RUN mvn clean install -DskipTests -Djdk.lang.Process.launchMechanism=vfork
-
-FROM build-hapi AS build-distroless
-RUN mvn package -DskipTests spring-boot:repackage -Pboot
-RUN mkdir /app && cp /tmp/hapi-fhir-jpaserver-starter/target/ROOT.war /app/main.war
+RUN mvn -ntp clean package -Pboot -Dmaven.test.skip=true -Djdk.lang.Process.launchMechanism=vfork
 
 
 ########### bitnami tomcat version is suitable for debugging and comes with a shell
@@ -48,7 +44,7 @@ FROM gcr.io/distroless/java17-debian12:nonroot AS default
 USER 65532:65532
 WORKDIR /app
 
-COPY --chown=nonroot:nonroot --from=build-distroless /app /app
+COPY --chown=nonroot:nonroot --from=build-hapi /tmp/hapi-fhir-jpaserver-starter/target/ROOT.war /app/main.war
 COPY --chown=nonroot:nonroot --from=build-hapi /tmp/hapi-fhir-jpaserver-starter/opentelemetry-javaagent.jar /app
 
 ENTRYPOINT ["java", "--class-path", "/app/main.war", "-Dloader.path=main.war!/WEB-INF/classes/,main.war!/WEB-INF/,/app/extra-classes", "org.springframework.boot.loader.PropertiesLauncher"]
