@@ -22,13 +22,16 @@ import org.hl7.fhir.r4.model.StringType;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.stereotype.Service;
 
+import io.micrometer.core.instrument.Timer;
 import jakarta.transaction.Transactional;
 
 /**
  * Aggregates block-level vital sign averages into neighborhood-level averages
  * and forwards them upstream
  */
+@Service
 public class NeighborhoodVitalAggregationService {
 
     private static final Logger logger = LoggerFactory.getLogger(NeighborhoodVitalAggregationService.class);
@@ -46,9 +49,11 @@ public class NeighborhoodVitalAggregationService {
     private String neighborhoodValue;
 
     private final UpstreamForwarder upstreamForwarder;
+    private final PerfMetricsService perfMetrics;
 
-    public NeighborhoodVitalAggregationService(UpstreamForwarder upstreamForwarder) {
+    public NeighborhoodVitalAggregationService(UpstreamForwarder upstreamForwarder, PerfMetricsService perfMetrics) {
         this.upstreamForwarder = upstreamForwarder;
+        this.perfMetrics = perfMetrics;
     }
 
     /**
@@ -56,6 +61,8 @@ public class NeighborhoodVitalAggregationService {
      */
     @Transactional
     public void processBlockAverages(List<Observation> observations) {
+        Timer.Sample sample = Timer.start();
+        try {
         if (observations == null || observations.isEmpty()) return;
 
         List<Observation> incomingNews2BlockAverages = observations.stream()
@@ -104,6 +111,9 @@ public class NeighborhoodVitalAggregationService {
         if (!neighborhoodAverages.isEmpty()) {
             logger.info("Forwarding {} neighborhood-level vital sign averages upstream", neighborhoodAverages.size());
             upstreamForwarder.createObservations(neighborhoodAverages);
+        }
+        } finally {
+            sample.stop(perfMetrics.neighVitalAggregationTimer);
         }
     }
 

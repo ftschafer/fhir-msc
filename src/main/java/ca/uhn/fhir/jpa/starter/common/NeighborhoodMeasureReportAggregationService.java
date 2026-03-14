@@ -24,6 +24,7 @@ import ca.uhn.fhir.jpa.api.dao.DaoRegistry;
 import ca.uhn.fhir.jpa.api.dao.IFhirResourceDao;
 import ca.uhn.fhir.jpa.searchparam.SearchParameterMap;
 import ca.uhn.fhir.rest.api.server.IBundleProvider;
+import io.micrometer.core.instrument.Timer;
 
 /**
  * Scheduled service that aggregates block-level MeasureReports into
@@ -56,14 +57,17 @@ public class NeighborhoodMeasureReportAggregationService {
 
     private final DaoRegistry daoRegistry;
     private final UpstreamForwarder upstreamForwarder;
+    private final PerfMetricsService perfMetrics;
 
-    public NeighborhoodMeasureReportAggregationService(DaoRegistry daoRegistry, UpstreamForwarder upstreamForwarder) {
+    public NeighborhoodMeasureReportAggregationService(DaoRegistry daoRegistry, UpstreamForwarder upstreamForwarder, PerfMetricsService perfMetrics) {
         this.daoRegistry = daoRegistry;
         this.upstreamForwarder = upstreamForwarder;
+        this.perfMetrics = perfMetrics;
     }
 
     @Scheduled(fixedDelayString = "${aggregation.neighborhood.measure-report.ms:5000}")
     public void aggregateNeighborhoodMeasureReports() {
+        Timer.Sample sample = Timer.start();
         try {
             IFhirResourceDao<MeasureReport> dao = daoRegistry.getResourceDao(MeasureReport.class);
             List<MeasureReport> blockReports = loadBlockReports(dao);
@@ -100,6 +104,8 @@ public class NeighborhoodMeasureReportAggregationService {
             }
         } catch (Exception e) {
             ourLog.warn("Neighborhood MeasureReport aggregation failed: {}", e.getMessage(), e);
+        } finally {
+            sample.stop(perfMetrics.neighMeasureReportAggregationTimer);
         }
     }
 

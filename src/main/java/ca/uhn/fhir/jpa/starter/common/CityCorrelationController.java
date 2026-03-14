@@ -32,6 +32,7 @@ import ca.uhn.fhir.jpa.api.dao.IFhirResourceDao;
 import ca.uhn.fhir.jpa.searchparam.SearchParameterMap;
 import ca.uhn.fhir.rest.api.server.IBundleProvider;
 import ca.uhn.fhir.rest.param.TokenParam;
+import io.micrometer.core.instrument.Timer;
 import jakarta.transaction.Transactional;
 
 /**
@@ -72,12 +73,14 @@ public class CityCorrelationController {
     private static final int  MORAN_PERMUTATIONS = 999;
 
     private final DaoRegistry daoRegistry;
+    private final PerfMetricsService perfMetrics;
 
     @org.springframework.beans.factory.annotation.Value("${location.city}")
     private String configuredCity;
 
-    public CityCorrelationController(DaoRegistry daoRegistry) {
+    public CityCorrelationController(DaoRegistry daoRegistry, PerfMetricsService perfMetrics) {
         this.daoRegistry = daoRegistry;
+        this.perfMetrics = perfMetrics;
     }
 
     // ── City-level correlations (derived from neighbourhood samples) ───────
@@ -85,51 +88,58 @@ public class CityCorrelationController {
     @GetMapping("/neigh-correlations")
     @Transactional
     public Map<String, Object> getNeighCorrelations() {
-        String cityFilter = resolveConfiguredCity();
+        perfMetrics.recordNeighCorrelationRequest();
+        Timer.Sample sample = Timer.start();
+        try {
+            String cityFilter = resolveConfiguredCity();
 
-        Map<String, NeighRow> byNeigh = loadNeighRows(cityFilter);
-        if (byNeigh.isEmpty()) {
+            Map<String, NeighRow> byNeigh = loadNeighRows(cityFilter);
+            if (byNeigh.isEmpty()) {
+                Map<String, Object> out = new LinkedHashMap<>();
+                out.put("city", cityFilter);
+                out.put("neighCount", 0);
+                out.put("message", "No neighbourhood source data available to compute city-level correlations");
+                out.put("correlations", List.of());
+                return out;
+            }
+
+            applyConditionCounts(byNeigh, cityFilter);
+            applyNeighNews2(byNeigh);
+            applyVitalSignAverages(byNeigh, cityFilter);
+
+            List<Map<String, Object>> correlations = new ArrayList<>();
+            correlations.add(correlationResult("careUnits_vs_news2",           byNeigh, r -> r.avgCare,   r -> r.avgNews2));
+            correlations.add(correlationResult("averageIncome_vs_conditions",  byNeigh, r -> r.avgIncome, r -> asDouble(r.conditionCount)));
+            correlations.add(correlationResult("meanAge_vs_heartRate",         byNeigh, r -> r.avgAge,    r -> r.heartRate));
+            correlations.add(correlationResult("meanAge_vs_systolicBP",        byNeigh, r -> r.avgAge,    r -> r.systolicBp));
+            correlations.add(correlationResult("meanAge_vs_diastolicBP",       byNeigh, r -> r.avgAge,    r -> r.diastolicBp));
+            perfMetrics.recordNeighCorrelationComputations(correlations.size());
+
+            List<Map<String, Object>> rows = new ArrayList<>();
+            for (NeighRow row : byNeigh.values()) {
+                Map<String, Object> entry = new LinkedHashMap<>();
+                entry.put("neighbourhood", row.neigh);
+                entry.put("averageIncome", row.avgIncome);
+                entry.put("careUnits",     row.avgCare);
+                entry.put("meanAge",       row.avgAge);
+                entry.put("avgNews2",      row.avgNews2);
+                entry.put("conditionCount", row.conditionCount);
+                entry.put("heartRate",     row.heartRate);
+                entry.put("systolicBP",    row.systolicBp);
+                entry.put("diastolicBP",   row.diastolicBp);
+                rows.add(entry);
+            }
+
             Map<String, Object> out = new LinkedHashMap<>();
-            out.put("city", cityFilter);
-            out.put("neighCount", 0);
-            out.put("message", "No neighbourhood source data available to compute city-level correlations");
-            out.put("correlations", List.of());
+            out.put("city",                       cityFilter);
+            out.put("neighCount",                 byNeigh.size());
+            out.put("minimumSampleForCorrelation", 3);
+            out.put("correlations",               correlations);
+            out.put("neighRows",                  rows);
             return out;
+        } finally {
+            sample.stop(perfMetrics.neighCorrelationTimer);
         }
-
-        applyConditionCounts(byNeigh, cityFilter);
-        applyNeighNews2(byNeigh);
-        applyVitalSignAverages(byNeigh, cityFilter);
-
-        List<Map<String, Object>> correlations = new ArrayList<>();
-        correlations.add(correlationResult("careUnits_vs_news2",           byNeigh, r -> r.avgCare,   r -> r.avgNews2));
-        correlations.add(correlationResult("averageIncome_vs_conditions",  byNeigh, r -> r.avgIncome, r -> asDouble(r.conditionCount)));
-        correlations.add(correlationResult("meanAge_vs_heartRate",         byNeigh, r -> r.avgAge,    r -> r.heartRate));
-        correlations.add(correlationResult("meanAge_vs_systolicBP",        byNeigh, r -> r.avgAge,    r -> r.systolicBp));
-        correlations.add(correlationResult("meanAge_vs_diastolicBP",       byNeigh, r -> r.avgAge,    r -> r.diastolicBp));
-
-        List<Map<String, Object>> rows = new ArrayList<>();
-        for (NeighRow row : byNeigh.values()) {
-            Map<String, Object> entry = new LinkedHashMap<>();
-            entry.put("neighbourhood", row.neigh);
-            entry.put("averageIncome", row.avgIncome);
-            entry.put("careUnits",     row.avgCare);
-            entry.put("meanAge",       row.avgAge);
-            entry.put("avgNews2",      row.avgNews2);
-            entry.put("conditionCount", row.conditionCount);
-            entry.put("heartRate",     row.heartRate);
-            entry.put("systolicBP",    row.systolicBp);
-            entry.put("diastolicBP",   row.diastolicBp);
-            rows.add(entry);
-        }
-
-        Map<String, Object> out = new LinkedHashMap<>();
-        out.put("city",                       cityFilter);
-        out.put("neighCount",                 byNeigh.size());
-        out.put("minimumSampleForCorrelation", 3);
-        out.put("correlations",               correlations);
-        out.put("neighRows",                  rows);
-        return out;
     }
 
     // ── City-level spatial autocorrelation (using neighbourhood adjacency) ──
@@ -137,45 +147,52 @@ public class CityCorrelationController {
     @GetMapping("/neigh-spatial-autocorrelation")
     @Transactional
     public Map<String, Object> getNeighSpatialAutocorrelation() {
-        String cityFilter = resolveConfiguredCity();
+        perfMetrics.recordNeighSpatialAutocorrelationRequest();
+        Timer.Sample sample = Timer.start();
+        try {
+            String cityFilter = resolveConfiguredCity();
 
-        Map<String, NeighRow> byNeigh = loadNeighRows(cityFilter);
-        if (byNeigh.isEmpty()) {
+            Map<String, NeighRow> byNeigh = loadNeighRows(cityFilter);
+            if (byNeigh.isEmpty()) {
+                Map<String, Object> out = new LinkedHashMap<>();
+                out.put("city",      cityFilter);
+                out.put("neighCount", 0);
+                out.put("message",   "No neighbourhood source data available to compute city-level spatial analysis");
+                out.put("variables", List.of());
+                return out;
+            }
+
+            applyConditionCounts(byNeigh, cityFilter);
+            applyNeighNews2(byNeigh);
+            applyVitalSignAverages(byNeigh, cityFilter);
+
+            List<String> neighOrder = new ArrayList<>(byNeigh.keySet());
+            double[][] weights = buildSpatialWeights(neighOrder);
+
+            List<Map<String, Object>> variables = new ArrayList<>();
+            variables.add(moranResult("avgNews2",      neighOrder, byNeigh, r -> r.avgNews2,              weights));
+            variables.add(moranResult("conditionCount", neighOrder, byNeigh, r -> asDouble(r.conditionCount), weights));
+            variables.add(moranResult("heartRate",     neighOrder, byNeigh, r -> r.heartRate,             weights));
+            variables.add(moranResult("systolicBP",    neighOrder, byNeigh, r -> r.systolicBp,            weights));
+            variables.add(moranResult("diastolicBP",   neighOrder, byNeigh, r -> r.diastolicBp,           weights));
+            variables.add(moranResult("averageIncome", neighOrder, byNeigh, r -> r.avgIncome,             weights));
+            variables.add(moranResult("careUnits",     neighOrder, byNeigh, r -> r.avgCare,               weights));
+            perfMetrics.recordNeighMoranVariableComputations(variables.size());
+
+            boolean anyClustered = variables.stream()
+                .anyMatch(v -> "clustered".equals(v.get("pattern")));
+
             Map<String, Object> out = new LinkedHashMap<>();
-            out.put("city",      cityFilter);
-            out.put("neighCount", 0);
-            out.put("message",   "No neighbourhood source data available to compute city-level spatial analysis");
-            out.put("variables", List.of());
+            out.put("city",       cityFilter);
+            out.put("neighCount", byNeigh.size());
+            out.put("weightMatrix",  "row-standardized contiguity (numeric neighbourhood adjacency, fallback: full connectivity)");
+            out.put("permutations",  MORAN_PERMUTATIONS);
+            out.put("blockLevelInterventionJustified", anyClustered);
+            out.put("variables",  variables);
             return out;
+        } finally {
+            sample.stop(perfMetrics.neighSpatialAutocorrelationTimer);
         }
-
-        applyConditionCounts(byNeigh, cityFilter);
-        applyNeighNews2(byNeigh);
-        applyVitalSignAverages(byNeigh, cityFilter);
-
-        List<String> neighOrder = new ArrayList<>(byNeigh.keySet());
-        double[][] weights = buildSpatialWeights(neighOrder);
-
-        List<Map<String, Object>> variables = new ArrayList<>();
-        variables.add(moranResult("avgNews2",      neighOrder, byNeigh, r -> r.avgNews2,              weights));
-        variables.add(moranResult("conditionCount", neighOrder, byNeigh, r -> asDouble(r.conditionCount), weights));
-        variables.add(moranResult("heartRate",     neighOrder, byNeigh, r -> r.heartRate,             weights));
-        variables.add(moranResult("systolicBP",    neighOrder, byNeigh, r -> r.systolicBp,            weights));
-        variables.add(moranResult("diastolicBP",   neighOrder, byNeigh, r -> r.diastolicBp,           weights));
-        variables.add(moranResult("averageIncome", neighOrder, byNeigh, r -> r.avgIncome,             weights));
-        variables.add(moranResult("careUnits",     neighOrder, byNeigh, r -> r.avgCare,               weights));
-
-        boolean anyClustered = variables.stream()
-            .anyMatch(v -> "clustered".equals(v.get("pattern")));
-
-        Map<String, Object> out = new LinkedHashMap<>();
-        out.put("city",       cityFilter);
-        out.put("neighCount", byNeigh.size());
-        out.put("weightMatrix",  "row-standardized contiguity (numeric neighbourhood adjacency, fallback: full connectivity)");
-        out.put("permutations",  MORAN_PERMUTATIONS);
-        out.put("blockLevelInterventionJustified", anyClustered);
-        out.put("variables",  variables);
-        return out;
     }
 
     // ── Data loading: groups block-level FHIR data by neighbourhood ──────────
