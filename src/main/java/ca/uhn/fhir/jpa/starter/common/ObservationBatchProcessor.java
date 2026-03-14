@@ -1,17 +1,19 @@
 package ca.uhn.fhir.jpa.starter.common;
 
-import io.micrometer.core.instrument.Timer;
-import jakarta.transaction.Transactional;
+import java.util.List;
+import java.util.stream.Collectors;
+
 import org.hl7.fhir.r4.model.Observation;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
-import java.util.List;
-import java.util.stream.Collectors;
+
+import io.micrometer.core.instrument.Timer;
+import jakarta.transaction.Transactional;
 
 @Component
 public class ObservationBatchProcessor {
 
-    private static final int BATCH_SIZE = 200;
+    private static final int BATCH_SIZE = 500;
 
     private final ObservationEventQueue queue;
     private final BlockNews2AggregationService blockService;
@@ -28,7 +30,7 @@ public class ObservationBatchProcessor {
         this.perfMetrics = perfMetrics;
     }
 
-    @Scheduled(fixedDelay = 200) // adjust for throughput/latency
+    @Scheduled(fixedDelay = 100) // adjust for throughput/latency
     @Transactional
     public void process() {
         if (queue.isEmpty()) return;

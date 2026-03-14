@@ -1,16 +1,18 @@
 package ca.uhn.fhir.jpa.starter.common;
 
-import io.micrometer.core.instrument.Timer;
-import jakarta.transaction.Transactional;
+import java.util.List;
+
 import org.hl7.fhir.r4.model.Patient;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
-import java.util.List;
+
+import io.micrometer.core.instrument.Timer;
+import jakarta.transaction.Transactional;
 
 @Component
 public class PatientBatchProcessor {
 
-    private static final int BATCH_SIZE = 200;
+    private static final int BATCH_SIZE = 500;
 
     private final PatientEventQueue queue;
     private final BlockNews2AggregationService blockService;
@@ -24,7 +26,7 @@ public class PatientBatchProcessor {
         this.perfMetrics = perfMetrics;
     }
 
-    @Scheduled(fixedDelay = 200)
+    @Scheduled(fixedDelay = 100)
     @Transactional
     public void process() {
         if (queue.isEmpty()) return;

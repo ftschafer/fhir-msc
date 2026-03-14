@@ -400,6 +400,15 @@ hapi:
 upstream:
   fhir:
     base-url: http://localhost:8091/fhir
+  reconcile:
+    patients:
+      enabled: true
+      initial-delay-ms: 120000
+      fixed-delay-ms: 2000000
+    conditions:
+      enabled: true
+      initial-delay-ms: 120000
+      fixed-delay-ms: 600000
   forward:
     batch-size: 400
     flush-delay-ms: 10

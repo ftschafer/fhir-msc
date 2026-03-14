@@ -1,0 +1,145 @@
+{
+  "resourceType": "MeasureReport",
+  "id": "neighborhood-health-aggregation-n81",
+  "meta": {
+    "versionId": "41",
+    "lastUpdated": "2026-03-14T01:40:41.398+00:00"
+  },
+  "extension": [
+    {
+      "url": "http://patient-location",
+      "extension": [
+        {
+          "url": "neighborhood",
+          "valueString": "N81"
+        }
+      ]
+    }
+  ],
+  "identifier": [
+    {
+      "system": "urn:neighborhood:health-aggregation",
+      "value": "N81-neighborhood-health-aggregation"
+    }
+  ],
+  "status": "complete",
+  "type": "summary",
+  "measure": "Measure/neighborhood-health-aggregation",
+  "period": {
+    "start": "2026-02-01T00:00:00+00:00",
+    "end": "2026-02-28T00:00:00+00:00"
+  },
+  "group": [
+    {
+      "code": {
+        "text": "Neighborhood Summary"
+      },
+      "stratifier": [
+        {
+          "code": [
+            {
+              "text": "Average Income"
+            }
+          ],
+          "stratum": [
+            {
+              "value": {
+                "text": "Income"
+              },
+              "measureScore": {
+                "value": 3200.00,
+                "unit": "BRL/month"
+              }
+            }
+          ]
+        },
+        {
+          "code": [
+            {
+              "text": "Care Units"
+            }
+          ],
+          "stratum": [
+            {
+              "value": {
+                "text": "Primary Care Units"
+              },
+              "measureScore": {
+                "value": 4,
+                "unit": "units"
+              }
+            }
+          ]
+        },
+        {
+          "code": [
+            {
+              "text": "Mean Age"
+            }
+          ],
+          "stratum": [
+            {
+              "value": {
+                "text": "Age"
+              },
+              "measureScore": {
+                "value": 53.10,
+                "unit": "years"
+              }
+            }
+          ]
+        },
+        {
+          "code": [
+            {
+              "text": "Male Patients"
+            }
+          ],
+          "stratum": [
+            {
+              "value": {
+                "text": "Male"
+              },
+              "measureScore": {
+                "value": 311,
+                "unit": "patients"
+              }
+            }
+          ]
+        },
+        {
+          "code": [
+            {
+              "text": "Female Patients"
+            }
+          ],
+          "stratum": [
+            {
+              "value": {
+                "text": "Female"
+              },
+              "measureScore": {
+                "value": 319,
+                "unit": "patients"
+              }
+            }
+          ]
+        },
+        {
+          "code": [
+            {
+              "text": "Seasonality"
+            }
+          ],
+          "stratum": [
+            {
+              "value": {
+                "text": "summer"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -24,6 +24,7 @@ import ca.uhn.fhir.jpa.api.dao.DaoRegistry;
 import ca.uhn.fhir.jpa.api.dao.IFhirResourceDao;
 import ca.uhn.fhir.jpa.searchparam.SearchParameterMap;
 import ca.uhn.fhir.rest.api.server.IBundleProvider;
+import io.micrometer.core.instrument.Timer;
 
 @Service
 public class NeighborhoodMeasureReportAggregationService {
@@ -48,17 +49,20 @@ public class NeighborhoodMeasureReportAggregationService {
 
     private final DaoRegistry daoRegistry;
     private final UpstreamForwarder upstreamForwarder;
+    private final PerfMetricsService perfMetrics;
 
     @org.springframework.beans.factory.annotation.Value("${location.neighborhood}")
     private String defaultNeighborhood;
 
-    public NeighborhoodMeasureReportAggregationService(DaoRegistry daoRegistry, UpstreamForwarder upstreamForwarder) {
+    public NeighborhoodMeasureReportAggregationService(DaoRegistry daoRegistry, UpstreamForwarder upstreamForwarder, PerfMetricsService perfMetrics) {
         this.daoRegistry = daoRegistry;
         this.upstreamForwarder = upstreamForwarder;
+        this.perfMetrics = perfMetrics;
     }
 
     @Scheduled(fixedDelayString = "${aggregation.neighborhood.measure-report.ms:5000}")
     public void aggregateNeighborhoodMeasureReports() {
+        Timer.Sample sample = Timer.start();
         try {
             IFhirResourceDao<MeasureReport> dao = daoRegistry.getResourceDao(MeasureReport.class);
             List<MeasureReport> blockReports = loadBlockReports(dao);
@@ -89,12 +93,15 @@ public class NeighborhoodMeasureReportAggregationService {
             if (!forwarded.isEmpty() && upstreamForwarder != null) {
                 try {
                     upstreamForwarder.upsertMeasureReports(forwarded);
+                    perfMetrics.recordNeighborhoodMeasureReportsForwarded(forwarded.size());
                 } catch (Exception ue) {
                     ourLog.warn("Upstream MeasureReport forwarding failed (local copy is safe): {}", ue.getMessage());
                 }
             }
         } catch (Exception e) {
             ourLog.warn("Neighborhood MeasureReport aggregation failed: {}", e.getMessage(), e);
+        } finally {
+            sample.stop(perfMetrics.neighborhoodMeasureReportAggregationTimer);
         }
     }
 

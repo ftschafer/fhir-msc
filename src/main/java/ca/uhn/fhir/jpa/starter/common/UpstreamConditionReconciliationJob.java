@@ -1,9 +1,12 @@
 package ca.uhn.fhir.jpa.starter.common;
 
-import ca.uhn.fhir.jpa.api.dao.DaoRegistry;
-import ca.uhn.fhir.jpa.api.dao.IFhirResourceDao;
-import ca.uhn.fhir.jpa.searchparam.SearchParameterMap;
-import ca.uhn.fhir.rest.api.server.IBundleProvider;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+
 import org.hl7.fhir.instance.model.api.IBaseResource;
 import org.hl7.fhir.r4.model.Condition;
 import org.hl7.fhir.r4.model.Observation;
@@ -14,12 +17,11 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
-import java.util.ArrayList;
-import java.util.LinkedHashMap;
-import java.util.LinkedHashSet;
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
+import ca.uhn.fhir.jpa.api.dao.DaoRegistry;
+import ca.uhn.fhir.jpa.api.dao.IFhirResourceDao;
+import ca.uhn.fhir.jpa.searchparam.SearchParameterMap;
+import ca.uhn.fhir.rest.api.server.IBundleProvider;
+import io.micrometer.core.instrument.Timer;
 
 /**
  * Ensures eventual consistency for condition forwarding when hook-based forwarding is missed.
@@ -32,20 +34,25 @@ public class UpstreamConditionReconciliationJob {
 
     private final DaoRegistry daoRegistry;
     private final UpstreamForwarder upstreamForwarder;
+    private final PerfMetricsService perfMetrics;
 
     @Value("${upstream.reconcile.conditions.enabled:true}")
     private boolean enabled;
 
-    public UpstreamConditionReconciliationJob(DaoRegistry daoRegistry, UpstreamForwarder upstreamForwarder) {
+    public UpstreamConditionReconciliationJob(DaoRegistry daoRegistry, UpstreamForwarder upstreamForwarder, PerfMetricsService perfMetrics) {
         this.daoRegistry = daoRegistry;
         this.upstreamForwarder = upstreamForwarder;
+        this.perfMetrics = perfMetrics;
     }
 
-    @Scheduled(initialDelayString = "${upstream.reconcile.conditions.initial-delay-ms:45000}", fixedDelayString = "${upstream.reconcile.conditions.fixed-delay-ms:180000}")
+    @Scheduled(initialDelayString = "${upstream.reconcile.conditions.initial-delay-ms:15000}", fixedDelayString = "${upstream.reconcile.conditions.fixed-delay-ms:15000}")
     public void reconcileConditions() {
         if (!enabled) {
             return;
         }
+
+        perfMetrics.recordConditionReconciliationRun();
+        Timer.Sample sample = Timer.start();
 
         try {
             List<Condition> conditions = loadAllConditions();
@@ -67,8 +74,13 @@ public class UpstreamConditionReconciliationJob {
                     conditions,
                     linkedObservations.isEmpty() ? null : new ArrayList<>(linkedObservations.values()));
 
+            perfMetrics.recordConditionReconciliationForwarded(conditions.size(), linkedObservations.size());
+
         } catch (RuntimeException e) {
+            perfMetrics.recordConditionReconciliationError();
             ourLog.warn("Condition reconciliation skipped due to error: {}", e.getMessage());
+        } finally {
+            sample.stop(perfMetrics.conditionReconciliationTimer);
         }
     }
 

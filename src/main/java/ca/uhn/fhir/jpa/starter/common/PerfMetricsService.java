@@ -21,10 +21,17 @@ public class PerfMetricsService {
     public final Timer spatialAutocorrelationTimer;
     public final Timer patientBatchTimer;
     public final Timer observationBatchTimer;
+    public final Timer conditionReconciliationTimer;
+    public final Timer neighborhoodMeasureReportAggregationTimer;
 
     public final Counter patientIngestCounter;
     public final Counter observationIngestCounter;
     public final Counter conditionIngestCounter;
+    public final Counter conditionReconciliationRunsCounter;
+    public final Counter conditionReconciliationErrorsCounter;
+    public final Counter conditionReconciliationConditionsForwardedCounter;
+    public final Counter conditionReconciliationLinkedObservationsForwardedCounter;
+    public final Counter neighborhoodMeasureReportsForwardedCounter;
     public final Counter correlationRequestCounter;
     public final Counter spatialAutocorrelationRequestCounter;
     public final Counter correlationComputationCounter;
@@ -73,6 +80,18 @@ public class PerfMetricsService {
                 .publishPercentileHistogram()
                 .register(registry);
 
+        conditionReconciliationTimer = Timer.builder("fhir.custom.upstream_condition_reconciliation")
+            .description("Latency of upstream condition reconciliation job")
+            .publishPercentiles(0.50, 0.95, 0.99)
+            .publishPercentileHistogram()
+            .register(registry);
+
+        neighborhoodMeasureReportAggregationTimer = Timer.builder("fhir.custom.neighborhood_measure_report_aggregation")
+            .description("Latency of neighborhood MeasureReport aggregation job")
+            .publishPercentiles(0.50, 0.95, 0.99)
+            .publishPercentileHistogram()
+            .register(registry);
+
         patientIngestCounter = Counter.builder("fhir.ingest.patients_total")
                 .description("Total patient writes seen by interceptor")
                 .register(registry);
@@ -84,6 +103,26 @@ public class PerfMetricsService {
         conditionIngestCounter = Counter.builder("fhir.ingest.conditions_total")
                 .description("Total condition writes seen by interceptor")
                 .register(registry);
+
+        conditionReconciliationRunsCounter = Counter.builder("fhir.upstream.condition_reconciliation_runs_total")
+            .description("Total condition reconciliation job runs")
+            .register(registry);
+
+        conditionReconciliationErrorsCounter = Counter.builder("fhir.upstream.condition_reconciliation_errors_total")
+            .description("Total condition reconciliation job errors")
+            .register(registry);
+
+        conditionReconciliationConditionsForwardedCounter = Counter.builder("fhir.upstream.condition_reconciliation_conditions_forwarded_total")
+            .description("Total conditions forwarded by reconciliation")
+            .register(registry);
+
+        conditionReconciliationLinkedObservationsForwardedCounter = Counter.builder("fhir.upstream.condition_reconciliation_linked_observations_forwarded_total")
+            .description("Total linked observations forwarded by condition reconciliation")
+            .register(registry);
+
+        neighborhoodMeasureReportsForwardedCounter = Counter.builder("fhir.upstream.neighborhood_measure_reports_forwarded_total")
+            .description("Total neighborhood MeasureReports forwarded upstream")
+            .register(registry);
 
         correlationRequestCounter = Counter.builder("fhir.analytics.correlation_requests_total")
             .description("Total block correlation requests")
@@ -128,6 +167,29 @@ public class PerfMetricsService {
 
     public void recordConditionIngested() {
         conditionIngestCounter.increment();
+    }
+
+    public void recordConditionReconciliationRun() {
+        conditionReconciliationRunsCounter.increment();
+    }
+
+    public void recordConditionReconciliationError() {
+        conditionReconciliationErrorsCounter.increment();
+    }
+
+    public void recordConditionReconciliationForwarded(int conditionsCount, int linkedObservationsCount) {
+        if (conditionsCount > 0) {
+            conditionReconciliationConditionsForwardedCounter.increment(conditionsCount);
+        }
+        if (linkedObservationsCount > 0) {
+            conditionReconciliationLinkedObservationsForwardedCounter.increment(linkedObservationsCount);
+        }
+    }
+
+    public void recordNeighborhoodMeasureReportsForwarded(int count) {
+        if (count > 0) {
+            neighborhoodMeasureReportsForwardedCounter.increment(count);
+        }
     }
 
     public void recordCorrelationRequest() {
