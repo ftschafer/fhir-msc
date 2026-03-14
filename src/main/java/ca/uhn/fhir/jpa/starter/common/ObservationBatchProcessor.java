@@ -2,6 +2,7 @@ package ca.uhn.fhir.jpa.starter.common;
 
 import jakarta.transaction.Transactional;
 import org.hl7.fhir.r4.model.Observation;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 import java.util.List;
@@ -10,8 +11,11 @@ import java.util.Set;
 @Component
 public class ObservationBatchProcessor {
 
-    private static final int BATCH_SIZE = 200;
-    private static final int MAX_DRAINS_PER_RUN = 20;
+    @Value("${aggregation.observation.batch-size:300}")
+    private int batchSize;
+
+    @Value("${aggregation.observation.max-drains-per-run:30}")
+    private int maxDrainsPerRun;
 
     private final ObservationEventQueue queue;
     private final News2AggregationService news2Service;
@@ -28,9 +32,11 @@ public class ObservationBatchProcessor {
     @Scheduled(fixedDelayString = "${aggregation.observation.fixed-delay-ms:50}") // adjust for throughput/latency
     @Transactional
     public void process() {
+        int effectiveBatchSize = Math.max(50, batchSize);
+        int maxDrains = Math.max(1, maxDrainsPerRun);
         int drains = 0;
-        while (!queue.isEmpty() && drains < MAX_DRAINS_PER_RUN) {
-            List<Observation> obs = queue.drain(BATCH_SIZE);
+        while (!queue.isEmpty() && drains < maxDrains) {
+            List<Observation> obs = queue.drain(effectiveBatchSize);
             if (obs.isEmpty()) return;
             Set<String> patients = news2Service.processBundleObservationsReturningPatients(obs);
             patients.forEach(cityService::updateCityForPatient);

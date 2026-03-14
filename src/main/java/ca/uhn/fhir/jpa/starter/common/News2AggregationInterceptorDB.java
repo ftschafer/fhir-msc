@@ -18,6 +18,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import io.micrometer.core.instrument.Timer;
 
 /**
  * Collects newly created Observations during a transaction, ensures each collected Observation
@@ -36,11 +37,13 @@ public class News2AggregationInterceptorDB {
     private static final String NEWS2_EXTENSION_URL = "http://news2-score";
 
     private final News2AggregationService aggregationService;
+    private final PerfMetricsService perfMetrics;
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
 
     @Autowired
-    public News2AggregationInterceptorDB(News2AggregationService aggregationService) {
+    public News2AggregationInterceptorDB(News2AggregationService aggregationService, PerfMetricsService perfMetrics) {
         this.aggregationService = aggregationService;
+        this.perfMetrics = perfMetrics;
     }
 
     // Collect created Observation instances (make copies so they are safe to use after commit).
@@ -77,6 +80,7 @@ public class News2AggregationInterceptorDB {
             tx.putUserData(TX_OBS_KEY, set);
         }
         set.add(copy);
+        perfMetrics.recordObservationIngested();
         logger.debug("Collected observation for NEWS2 aggregation (patientRef={})", obs.getSubject() == null ? "?" : obs.getSubject().getReference());
     }
 
@@ -91,11 +95,15 @@ public class News2AggregationInterceptorDB {
 
         List<Observation> observations = new ArrayList<>(set);
         executor.submit(() -> {
+            Timer.Sample sample = Timer.start();
             try {
                 logger.info("Processing {} observations for NEWS2 aggregation", observations.size());
                 aggregationService.processBundleObservations(observations);
             } catch (Exception e) {
+                perfMetrics.recordObservationProcessingError();
                 logger.error("News2 aggregation failed", e);
+            } finally {
+                sample.stop(perfMetrics.observationProcessingTimer);
             }
         });
     }

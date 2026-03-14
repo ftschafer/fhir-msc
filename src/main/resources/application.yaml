@@ -98,8 +98,14 @@ spring:
 aggregation:
   patient:
     fixed-delay-ms: 50
+    batch-size: 300
+    max-drains-per-run: 30
+    queue-max-size: 15000
   observation:
     fixed-delay-ms: 50
+    batch-size: 300
+    max-drains-per-run: 30
+    queue-max-size: 20000
 hapi:
   fhir:
     ### This flag when enabled to true, will avail evaluate measure operations from CR Module.
@@ -208,7 +214,7 @@ hapi:
     #    allow_multiple_delete: true
     #    allow_override_default_search_params: true
     #    auto_create_placeholder_reference_targets: false
-    #    mass_ingestion_mode_enabled: false
+    mass_ingestion_mode_enabled: true
     ### tells the server to automatically append the current version of the target resource to references at these paths
     #    auto_version_reference_at_paths: Device.patient, Device.location, Device.parent, DeviceMetric.parent, DeviceMetric.source, Observation.device, Observation.subject
     #    ips_enabled: false
@@ -406,4 +412,15 @@ hapi:
 upstream:
   fhir:
     base-url: http://localhost:9000/fhir
+  reconcile:
+    patients:
+      enabled: true
+      chunk-size: 300
+      initial-delay-ms: 60000
+      fixed-delay-ms: 300000
+    conditions:
+      enabled: true
+      chunk-size: 200
+      initial-delay-ms: 60000
+      fixed-delay-ms: 180000
 

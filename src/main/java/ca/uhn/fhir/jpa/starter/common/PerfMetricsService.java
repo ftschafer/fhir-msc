@@ -22,6 +22,9 @@ public class PerfMetricsService {
     // ── Vital-sign aggregation (NeighborhoodVitalAggregationService) ──────────
     public final Timer neighVitalAggregationTimer;
 
+        // ── Observation ingestion/processing ──────────────────────────────────────
+        public final Timer observationProcessingTimer;
+
     // ── MeasureReport aggregation pipeline (scheduled) ────────────────────────
     public final Timer neighMeasureReportAggregationTimer;   // block → neighbourhood
     public final Timer cityMeasureReportAggregationTimer;    // neighbourhood → city
@@ -45,6 +48,8 @@ public class PerfMetricsService {
     private final Counter neighCorrelationComputations;
     private final Counter neighSpatialAutocorrelationRequests;
     private final Counter neighMoranVariableComputations;
+        private final Counter observationIngested;
+        private final Counter observationProcessingErrors;
     private final Counter conditionIngested;
     private final Counter blockCorrelationRequests;
     private final Counter blockCorrelationComputations;
@@ -78,6 +83,11 @@ public class PerfMetricsService {
         // Vital-sign aggregation
         neighVitalAggregationTimer = Timer.builder("fhir.city.vital_aggregation.duration")
                 .description("Latency of neighbourhood vital-sign aggregation pass")
+                .register(registry);
+
+        // Observation ingestion/processing
+        observationProcessingTimer = Timer.builder("fhir.city.observation.processing.duration")
+                .description("Latency of NEWS2 observation processing after transaction commit")
                 .register(registry);
 
         // MeasureReport aggregation pipeline
@@ -128,6 +138,14 @@ public class PerfMetricsService {
                 .description("Variables for which neighbourhood Moran's I was computed")
                 .register(registry);
 
+        observationIngested = Counter.builder("fhir.city.observation.ingested.total")
+                .description("Observations ingested into NEWS2 pipeline")
+                .register(registry);
+
+        observationProcessingErrors = Counter.builder("fhir.city.observation.processing.errors.total")
+                .description("Errors during asynchronous NEWS2 observation processing")
+                .register(registry);
+
         // Condition ingestion
         conditionIngested = Counter.builder("fhir.city.condition.ingested.total")
                 .description("Conditions ingested and forwarded upstream")
@@ -161,6 +179,12 @@ public class PerfMetricsService {
     public void recordNeighCorrelationComputations(int count)  { neighCorrelationComputations.increment(count); }
     public void recordNeighSpatialAutocorrelationRequest()     { neighSpatialAutocorrelationRequests.increment(); }
     public void recordNeighMoranVariableComputations(int count){ neighMoranVariableComputations.increment(count); }
+
+        // ── Observation-ingestion helpers ─────────────────────────────────────────
+
+        public void recordObservationIngested()                    { observationIngested.increment(); }
+        public void recordObservationIngested(int count)           { if (count > 0) observationIngested.increment(count); }
+        public void recordObservationProcessingError()             { observationProcessingErrors.increment(); }
 
     // ── Condition-ingestion helper ────────────────────────────────────────────
 

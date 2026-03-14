@@ -10,6 +10,7 @@ services:
       SPRING_DATASOURCE_PASSWORD: admin
       SPRING_JPA_HIBERNATE_DDL_AUTO: ${SPRING_JPA_HIBERNATE_DDL_AUTO:-update}
       LOCATION_CITY: ${LOCATION_CITY:-C91}
+      JAVA_TOOL_OPTIONS: ${JAVA_TOOL_OPTIONS:--Xms1g -Xmx3g -XX:+UseG1GC -XX:MaxGCPauseMillis=200 -XX:+UseStringDeduplication -XX:+HeapDumpOnOutOfMemoryError}
     volumes:
       - ./custom:/app/custom
       - ./configs:/app/configs
