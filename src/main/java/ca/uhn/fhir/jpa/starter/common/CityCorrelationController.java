@@ -58,8 +58,11 @@ public class CityCorrelationController {
     private static final String NEIGHBORHOOD_URL = "neighborhood";
     private static final String CITY_URL       = "city";
 
-    private static final String BLOCK_MEASURE          = "Measure/block-health-aggregation";
-    private static final String BLOCK_IDENTIFIER_SYSTEM = "urn:block:health-aggregation";
+    private static final String BLOCK_MEASURE               = "Measure/block-health-aggregation";
+    private static final String BLOCK_IDENTIFIER_SYSTEM      = "urn:block:health-aggregation";
+
+    private static final String NEIGHBORHOOD_MEASURE          = "Measure/neighborhood-health-aggregation";
+    private static final String NEIGHBORHOOD_IDENTIFIER_SYSTEM = "urn:neighborhood:health-aggregation";
 
     private static final String NEWS2_IDENTIFIER_SYSTEM = "urn:aggregate:news2";
     private static final String BLOCK_AVERAGE_SUFFIX    = "|block-average";
@@ -218,7 +221,7 @@ public class CityCorrelationController {
             if (!(resource instanceof MeasureReport report)) {
                 continue;
             }
-            if (!isBlockLayerMeasure(report)) {
+            if (!isBlockLayerMeasure(report) && !isNeighborhoodLayerMeasure(report)) {
                 continue;
             }
 
@@ -894,6 +897,15 @@ public class CityCorrelationController {
         if (BLOCK_MEASURE.equals(report.getMeasure())) return true;
         for (Identifier identifier : report.getIdentifier()) {
             if (identifier != null && BLOCK_IDENTIFIER_SYSTEM.equals(identifier.getSystem())) return true;
+        }
+        return false;
+    }
+
+    private boolean isNeighborhoodLayerMeasure(MeasureReport report) {
+        if (report == null) return false;
+        if (NEIGHBORHOOD_MEASURE.equals(report.getMeasure())) return true;
+        for (Identifier identifier : report.getIdentifier()) {
+            if (identifier != null && NEIGHBORHOOD_IDENTIFIER_SYSTEM.equals(identifier.getSystem())) return true;
         }
         return false;
     }
