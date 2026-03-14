@@ -13,6 +13,7 @@ services:
       SPRING_DATASOURCE_PASSWORD: "${SPRING_DATASOURCE_PASSWORD:-admin}"
       SPRING_DATASOURCE_DRIVERCLASSNAME: "${SPRING_DATASOURCE_DRIVERCLASSNAME:-org.postgresql.Driver}"
       SPRING_JPA_HIBERNATE_DDL_AUTO: "${SPRING_JPA_HIBERNATE_DDL_AUTO:-update}"
+      SERVER_PORT: "${APP_PORT:-8071}"
 
       # Location layer
       HAPI_FHIR_LOCATION_BLOCK: "${HAPI_FHIR_LOCATION_BLOCK:-B71}"
@@ -33,7 +34,7 @@ services:
       - ./custom:/app/custom
       - ./configs:/app/configs
     ports:
-      - "8071:8071"
+      - "${APP_PORT:-8071}:${APP_PORT:-8071}"
   hapi-fhir-postgres:
     image: postgres:15-alpine
     container_name: hapi-fhir-postgres
