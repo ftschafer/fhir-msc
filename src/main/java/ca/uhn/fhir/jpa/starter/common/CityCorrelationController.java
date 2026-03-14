@@ -226,7 +226,7 @@ public class CityCorrelationController {
             }
 
             String city = extractCity(report);
-            if (cityFilter != null && !cityFilter.equalsIgnoreCase(normalize(city))) {
+            if (cityFilter != null && city != null && !cityFilter.equalsIgnoreCase(normalize(city))) {
                 continue;
             }
 
@@ -283,7 +283,7 @@ public class CityCorrelationController {
                 continue;
             }
             String city = extractCity(patient);
-            if (cityFilter != null && !cityFilter.equalsIgnoreCase(normalize(city))) {
+            if (cityFilter != null && city != null && !cityFilter.equalsIgnoreCase(normalize(city))) {
                 continue;
             }
             String neigh = extractNeighborhood(patient);
