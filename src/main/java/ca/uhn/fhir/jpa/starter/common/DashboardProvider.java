@@ -28,6 +28,7 @@ import ca.uhn.fhir.rest.annotation.OperationParam;
 import ca.uhn.fhir.rest.api.server.IBundleProvider;
 import ca.uhn.fhir.rest.param.TokenParam;
 import ca.uhn.fhir.rest.server.IResourceProvider;
+import io.micrometer.core.instrument.Timer;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 
@@ -42,7 +43,8 @@ public class DashboardProvider implements IResourceProvider {
     private static final String BLOCK_AVERAGE_SUFFIX = "|block-average";
 
     private final DaoRegistry daoRegistry;
-    
+    private final PerfMetricsService perfMetrics;
+
     // Cache results for 30 seconds
     private DashboardStats cachedStats;
     private long cacheTimestamp = 0;
@@ -51,8 +53,9 @@ public class DashboardProvider implements IResourceProvider {
     @Value("${location.city}")
     private String configuredCity;
 
-    public DashboardProvider(DaoRegistry daoRegistry) {
+    public DashboardProvider(DaoRegistry daoRegistry, PerfMetricsService perfMetrics) {
         this.daoRegistry = daoRegistry;
+        this.perfMetrics = perfMetrics;
     }
 
     @Override
@@ -74,12 +77,15 @@ public class DashboardProvider implements IResourceProvider {
             // Check cache (only if no filter or matches current block)
             long now = System.currentTimeMillis();
             if (!bypassCache && cachedStats != null && (now - cacheTimestamp) < cacheDurationMs && filterBlock == null) {
+                perfMetrics.recordDashboardCacheHit();
                 writeJsonResponse(response, cachedStats);
                 return;
             }
-            
+
             // Calculate fresh stats
+            Timer.Sample sample = Timer.start();
             DashboardStats stats = calculateStats(filterBlock);
+            sample.stop(perfMetrics.dashboardRequestTimer);
             
             // Update cache (only if no filter)
             if (filterBlock == null) {
@@ -208,32 +214,43 @@ public class DashboardProvider implements IResourceProvider {
         for (IBaseResource res : averages) {
             Observation obs = (Observation) res;
             String block = extractBlockFromObservation(obs);
+
+            // Build the VitalSignAverage from this observation
+            VitalSignAverage vsa = new VitalSignAverage();
+            vsa.vitalSign = obs.getCode() != null && obs.getCode().hasCoding()
+                ? obs.getCode().getCodingFirstRep().getDisplay()
+                : "";
+            vsa.averageValue = obs.getValueQuantity() != null
+                ? obs.getValueQuantity().getValue().doubleValue()
+                : 0;
+            vsa.unit = obs.getValueQuantity() != null
+                ? obs.getValueQuantity().getUnit()
+                : "";
+            Extension sampleExt = obs.getExtensionByUrl("http://observation-sample-count");
+            if (sampleExt != null && sampleExt.getValue() instanceof IntegerType) {
+                Integer sampleCount = ((IntegerType) sampleExt.getValue()).getValue();
+                vsa.sampleCount = sampleCount != null ? sampleCount : 0;
+            } else {
+                vsa.sampleCount = 0;
+            }
+
+            // Add to block-specific stats when the block resolves and matches any filter
             if (block != null && (filterBlock == null || filterBlock.isEmpty() || block.equals(filterBlock))) {
                 BlockStats bs = blockStatsMap.get(block);
                 if (bs != null) {
-                    VitalSignAverage vsa = new VitalSignAverage();
-                    vsa.vitalSign = obs.getCode() != null && obs.getCode().hasCoding()
-                        ? obs.getCode().getCodingFirstRep().getDisplay()
-                        : "";
-                    vsa.averageValue = obs.getValueQuantity() != null
-                        ? obs.getValueQuantity().getValue().doubleValue()
-                        : 0;
-                    vsa.unit = obs.getValueQuantity() != null
-                        ? obs.getValueQuantity().getUnit()
-                        : "";
-                    Extension sampleExt = obs.getExtensionByUrl("http://observation-sample-count");
-                    if (sampleExt != null && sampleExt.getValue() instanceof IntegerType) {
-                        Integer sampleCount = ((IntegerType) sampleExt.getValue()).getValue();
-                        vsa.sampleCount = sampleCount != null ? sampleCount : 0;
-                    } else {
-                        vsa.sampleCount = 0;
-                    }
                     bs.vitalSignAverages.add(vsa);
-
-                    String vitalKey = vsa.vitalSign == null ? "" : vsa.vitalSign;
-                    VitalSignAccumulator acc = cityVitalMap.computeIfAbsent(vitalKey, k -> new VitalSignAccumulator());
-                    acc.add(vsa.averageValue, vsa.sampleCount, vsa.unit);
                 }
+            }
+
+            // Accumulate for city-level vitals:
+            //   - no filter → include all observations (block-level and neighbourhood-level)
+            //   - filter set → include only observations whose block matches
+            boolean includeForCity = (filterBlock == null || filterBlock.isEmpty())
+                    || (block != null && block.equals(filterBlock));
+            if (includeForCity) {
+                String vitalKey = vsa.vitalSign == null ? "" : vsa.vitalSign;
+                VitalSignAccumulator acc = cityVitalMap.computeIfAbsent(vitalKey, k -> new VitalSignAccumulator());
+                acc.add(vsa.averageValue, vsa.sampleCount, vsa.unit);
             }
         }
 
@@ -280,9 +297,11 @@ public class DashboardProvider implements IResourceProvider {
         stats.neighborhoodStats = new ArrayList<>(neighborhoodStatsMap.values());
         stats.totalPatients = totalPatients;
 
-        // ÔöÇÔöÇ Statistical Summarization: reuse the same blockStats the dashboard displays ÔöÇ
+        // ── Statistical Summarization: reuse the same blockStats the dashboard displays ─
         String cityScope = normalize(configuredCity);
+        Timer.Sample statsSample = Timer.start();
         stats.blockStatistics = computeStatsSummary(stats.blockStats, cityScope);
+        statsSample.stop(perfMetrics.dashboardStatsSummaryTimer);
 
         return stats;
     }
