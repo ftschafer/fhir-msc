@@ -22,7 +22,7 @@ services:
       LOCATION_NEIGHBORHOOD: "${LOCATION_NEIGHBORHOOD:-N81}"
 
       # Forwarding target (set empty to disable in code, or point to another FHIR base URL)
-      UPSTREAM_FHIR_BASE_URL: "${UPSTREAM_FHIR_BASE_URL:-http://localhost:8091/fhir}"
+      UPSTREAM_FHIR_BASE_URL: "${UPSTREAM_FHIR_BASE_URL:-http://3.150.116.97:8091/fhir}"
       # JVM memory tuning for higher ingest loads
       JAVA_TOOL_OPTIONS: "${JAVA_TOOL_OPTIONS:--Xms1g -Xmx3g -XX:+UseG1GC -XX:+ExitOnOutOfMemoryError}"
     depends_on:
