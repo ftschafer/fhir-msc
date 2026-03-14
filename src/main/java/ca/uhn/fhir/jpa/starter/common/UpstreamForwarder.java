@@ -1,11 +1,11 @@
 package ca.uhn.fhir.jpa.starter.common;
 
-import ca.uhn.fhir.context.FhirContext;
-import ca.uhn.fhir.jpa.api.dao.DaoRegistry;
-import ca.uhn.fhir.jpa.api.dao.IFhirResourceDao;
-import ca.uhn.fhir.rest.client.api.IGenericClient;
-import ca.uhn.fhir.rest.client.interceptor.SimpleRequestHeaderInterceptor;
-import ca.uhn.fhir.rest.server.exceptions.ResourceVersionConflictException;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+
 import org.hl7.fhir.r4.model.Bundle;
 import org.hl7.fhir.r4.model.Condition;
 import org.hl7.fhir.r4.model.DomainResource;
@@ -20,11 +20,12 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
+import ca.uhn.fhir.context.FhirContext;
+import ca.uhn.fhir.jpa.api.dao.DaoRegistry;
+import ca.uhn.fhir.jpa.api.dao.IFhirResourceDao;
+import ca.uhn.fhir.rest.client.api.IGenericClient;
+import ca.uhn.fhir.rest.client.interceptor.SimpleRequestHeaderInterceptor;
+import ca.uhn.fhir.rest.server.exceptions.ResourceVersionConflictException;
 
 @Component
 public class UpstreamForwarder {
@@ -34,6 +35,7 @@ public class UpstreamForwarder {
     private final IGenericClient client;
     private final IFhirResourceDao<Patient> patientDao;
     private final String city;
+    private final String upstreamUrl;
 
     private final Map<String, Object> patientLocks = new ConcurrentHashMap<>();
     private final Map<String, Object> observationLocks = new ConcurrentHashMap<>();
@@ -62,6 +64,7 @@ public class UpstreamForwarder {
         this.client.registerInterceptor(new SimpleRequestHeaderInterceptor("X-Internal-Request", "true"));
         this.patientDao = daoRegistry.getResourceDao(Patient.class);
         this.city = city;
+        this.upstreamUrl = upstreamUrl;
     }
 
     public void createObservations(List<Observation> observations) {
@@ -578,7 +581,13 @@ public class UpstreamForwarder {
                         .setUrl(id != null ? "MeasureReport/" + id : "MeasureReport");
             }
             client.transaction().withBundle(tx).execute();
-        } catch (Exception ignored) {
+        } catch (Exception ex) {
+            List<String> reportIds = new ArrayList<>();
+            for (MeasureReport report : reports) {
+                String id = report.getIdElement().getIdPart();
+                reportIds.add(id != null ? id : "<no-id>");
+            }
+            ourLog.warn("Failed to forward MeasureReports upstream to {} ids={} reason={}", upstreamUrl, reportIds, ex.getMessage(), ex);
         }
     }
 }
