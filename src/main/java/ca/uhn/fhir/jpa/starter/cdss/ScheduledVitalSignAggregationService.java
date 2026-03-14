@@ -63,8 +63,8 @@ public class ScheduledVitalSignAggregationService {
         put("59408-5", "Oxygen saturation");
     }};
 
-    // Run every 3 seconds for testing
-    @Scheduled(fixedDelay = 3000, initialDelay = 3000)
+    // Run every 15 seconds (15000 ms)
+    @Scheduled(fixedDelay = 15000, initialDelay = 5000)
     public void calculateAndForwardAverages() {
         logger.info("========================================");
         logger.info("VITAL SIGN AGGREGATION - Starting");

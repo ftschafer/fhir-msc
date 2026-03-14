@@ -57,7 +57,7 @@ public class PatientTotalNews2ScoreInterceptor {
             return;
         }
         if (resource instanceof Condition) {
-            perfMetrics.conditionCreatedCounter.increment();
+            perfMetrics.recordConditionIngested();
             return;
         }
         if (!(resource instanceof Observation)) return;

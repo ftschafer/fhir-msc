@@ -41,6 +41,12 @@ public class BlockSocioeconomicAnalysisService {
     @Value("${hapi.fhir.analysis.socioeconomic.kmeans.runs:8}")
     private int configuredRuns;
 
+    @Value("${hapi.fhir.analysis.socioeconomic.kmeans.max-iterations:30}")
+    private int configuredMaxIterations;
+
+    @Value("${hapi.fhir.analysis.socioeconomic.kmeans.silhouette-sample-size:600}")
+    private int configuredSilhouetteSampleSize;
+
     @Value("${hapi.fhir.analysis.socioeconomic.kmeans.min-silhouette:0.2}")
     private double minSilhouette;
 
@@ -227,13 +233,14 @@ public class BlockSocioeconomicAnalysisService {
     private KMeansResult runKMeans(List<double[]> points, int k, long seed) {
         Random random = new Random(seed);
         List<double[]> centroids = initializeCentroids(points, k, random);
+        int maxIterations = Math.max(5, configuredMaxIterations);
 
         int[] assignment = new int[points.size()];
         for (int i = 0; i < assignment.length; i++) {
             assignment[i] = -1;
         }
 
-        for (int iter = 0; iter < 40; iter++) {
+        for (int iter = 0; iter < maxIterations; iter++) {
             boolean changed = false;
 
             for (int i = 0; i < points.size(); i++) {
@@ -318,6 +325,9 @@ public class BlockSocioeconomicAnalysisService {
             return 0.0;
         }
 
+        int requestedSampleSize = Math.max(3, configuredSilhouetteSampleSize);
+        int[] sampleIndices = buildSampleIndices(points.size(), requestedSampleSize);
+
         List<List<Integer>> members = new ArrayList<>();
         for (int i = 0; i < k; i++) {
             members.add(new ArrayList<>());
@@ -332,7 +342,8 @@ public class BlockSocioeconomicAnalysisService {
         double total = 0.0;
         int counted = 0;
 
-        for (int i = 0; i < points.size(); i++) {
+        for (int sampleIdx : sampleIndices) {
+            int i = sampleIdx;
             int ci = assignment[i];
             if (ci < 0 || ci >= k) {
                 continue;
@@ -365,6 +376,30 @@ public class BlockSocioeconomicAnalysisService {
         }
 
         return counted == 0 ? 0.0 : total / counted;
+    }
+
+    private int[] buildSampleIndices(int totalSize, int requestedSampleSize) {
+        if (requestedSampleSize >= totalSize) {
+            int[] all = new int[totalSize];
+            for (int i = 0; i < totalSize; i++) {
+                all[i] = i;
+            }
+            return all;
+        }
+
+        int[] sample = new int[requestedSampleSize];
+        boolean[] used = new boolean[totalSize];
+        Random random = new Random(20260314L + totalSize + requestedSampleSize);
+        int filled = 0;
+        while (filled < requestedSampleSize) {
+            int pick = random.nextInt(totalSize);
+            if (used[pick]) {
+                continue;
+            }
+            used[pick] = true;
+            sample[filled++] = pick;
+        }
+        return sample;
     }
 
     private double meanDistance(int pointIndex, List<Integer> group, List<double[]> points, boolean skipSelf) {

@@ -3,6 +3,7 @@ package ca.uhn.fhir.jpa.starter.common;
 import io.micrometer.core.instrument.Timer;
 import jakarta.transaction.Transactional;
 import org.hl7.fhir.r4.model.Observation;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
@@ -12,7 +13,8 @@ import java.util.Set;
 @Component
 public class ObservationBatchProcessor {
 
-    private static final int BATCH_SIZE = 500;
+    @Value("${hapi.fhir.news2.batch.size:1000}")
+    private int batchSize;
 
     private final ObservationEventQueue queue;
     private final News2AggregationService news2Service;
@@ -29,11 +31,12 @@ public class ObservationBatchProcessor {
         this.perfMetrics = perfMetrics;
     }
 
-    @Scheduled(fixedDelay = 150)
+    @Scheduled(fixedDelayString = "${hapi.fhir.news2.batch.fixed-delay-ms:75}")
     @Transactional
     public void process() {
         if (queue.isEmpty()) return;
-        List<Observation> batch = queue.drain(BATCH_SIZE);
+        int effectiveBatchSize = Math.max(100, batchSize);
+        List<Observation> batch = queue.drain(effectiveBatchSize);
         if (batch.isEmpty()) return;
 
         Timer.Sample sample = Timer.start();

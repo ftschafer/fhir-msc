@@ -3,6 +3,8 @@ package ca.uhn.fhir.jpa.starter.common;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.ArrayList;
+import java.lang.reflect.Method;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.locks.LockSupport;
 
@@ -35,62 +37,110 @@ public class UpstreamForwarder {
 
     @Value("${hapi.fhir.location.block:North}")
     private String blockValue;
+
+    @Value("${upstream.tx.chunk.observations:300}")
+    private int observationTxChunkSize;
+
+    @Value("${upstream.tx.chunk.measure-reports:150}")
+    private int measureReportTxChunkSize;
+
+    @Value("${upstream.tx.chunk.conditions:150}")
+    private int conditionTxChunkSize;
+
+    @Value("${upstream.tx.chunk.patients:200}")
+    private int patientTxChunkSize;
     
     private final IGenericClient client;
 
-    public UpstreamForwarder(FhirContext ctx, @Value("${upstream.fhir.base-url:http://18.218.25.8:8081/fhir}") String upstreamUrl) {
-        ctx.getRestfulClientFactory().setServerValidationMode(ServerValidationModeEnum.NEVER);
+    public UpstreamForwarder(
+            FhirContext ctx,
+            @Value("${upstream.fhir.base-url:http://18.218.25.8:8081/fhir}") String upstreamUrl,
+            @Value("${upstream.client.connect-timeout-ms:2000}") int connectTimeoutMs,
+            @Value("${upstream.client.socket-timeout-ms:10000}") int socketTimeoutMs,
+            @Value("${upstream.client.connection-request-timeout-ms:2000}") int connectionRequestTimeoutMs,
+            @Value("${upstream.client.pool-max-total:200}") int poolMaxTotal,
+            @Value("${upstream.client.pool-max-per-route:100}") int poolMaxPerRoute
+    ) {
+        var clientFactory = ctx.getRestfulClientFactory();
+        clientFactory.setServerValidationMode(ServerValidationModeEnum.NEVER);
+        applyClientTuning(clientFactory, connectTimeoutMs, socketTimeoutMs, connectionRequestTimeoutMs, poolMaxTotal, poolMaxPerRoute);
         this.client = ctx.newRestfulGenericClient(upstreamUrl);
         this.client.registerInterceptor(new SimpleRequestHeaderInterceptor("X-Internal-Request", "true"));
+    }
+
+    private void applyClientTuning(Object clientFactory,
+                                   int connectTimeoutMs,
+                                   int socketTimeoutMs,
+                                   int connectionRequestTimeoutMs,
+                                   int poolMaxTotal,
+                                   int poolMaxPerRoute) {
+        invokeIntSetter(clientFactory, "setConnectTimeout", connectTimeoutMs);
+        invokeIntSetter(clientFactory, "setSocketTimeout", socketTimeoutMs);
+        invokeIntSetter(clientFactory, "setConnectionRequestTimeout", connectionRequestTimeoutMs);
+        invokeIntSetter(clientFactory, "setPoolMaxTotal", poolMaxTotal);
+        invokeIntSetter(clientFactory, "setPoolMaxPerRoute", poolMaxPerRoute);
+    }
+
+    private void invokeIntSetter(Object target, String methodName, int value) {
+        try {
+            Method m = target.getClass().getMethod(methodName, int.class);
+            m.invoke(target, value);
+        } catch (Exception ignored) {
+            // Not all client factory implementations expose all tuning setters.
+        }
     }
 
     public boolean createObservations(List<Observation> observations) {
         if (observations == null || observations.isEmpty()) return true;
         if (isUpstreamSuppressed("observations")) return false;
         try {
-            Bundle tx = new Bundle().setType(Bundle.BundleType.TRANSACTION);
-            for (Observation o : observations) {
-                Observation obsCopy = o.copy();
-                obsCopy.setId((String) null);
-                
-                // Remove any existing location extensions and add the block extension
-                obsCopy.getExtension().removeIf(ext -> "http://patient-location".equals(ext.getUrl()));
-                Extension locationExtension = new Extension();
-                locationExtension.setUrl("http://patient-location");
-                Extension blockExtension = new Extension();
-                blockExtension.setUrl("block");
-                blockExtension.setValue(new org.hl7.fhir.r4.model.StringType(blockValue));
-                locationExtension.addExtension(blockExtension);
-                obsCopy.addExtension(locationExtension);
-                
-                Bundle.BundleEntryComponent e = tx.addEntry().setResource(obsCopy);
-                
-                // Prefer stable identifier when available to avoid duplicate aggregates
-                String conditionalUrl;
-                if (o.hasIdentifier() && o.getIdentifierFirstRep().hasSystem() && o.getIdentifierFirstRep().hasValue()) {
-                    conditionalUrl = "Observation?identifier=" + o.getIdentifierFirstRep().getSystem() + "|" + o.getIdentifierFirstRep().getValue();
-                } else {
-                    // Build conditional criteria to update existing observations instead of creating duplicates
-                    StringBuilder criteria = new StringBuilder();
-                    if (o.hasSubject() && o.getSubject().hasReference()) {
-                        criteria.append("subject=").append(o.getSubject().getReference());
+            int chunkSize = Math.max(50, observationTxChunkSize);
+            for (int start = 0; start < observations.size(); start += chunkSize) {
+                int end = Math.min(observations.size(), start + chunkSize);
+                Bundle tx = new Bundle().setType(Bundle.BundleType.TRANSACTION);
+                for (Observation o : observations.subList(start, end)) {
+                    Observation obsCopy = o.copy();
+                    obsCopy.setId((String) null);
+
+                    // Remove any existing location extensions and add the block extension
+                    obsCopy.getExtension().removeIf(ext -> "http://patient-location".equals(ext.getUrl()));
+                    Extension locationExtension = new Extension();
+                    locationExtension.setUrl("http://patient-location");
+                    Extension blockExtension = new Extension();
+                    blockExtension.setUrl("block");
+                    blockExtension.setValue(new org.hl7.fhir.r4.model.StringType(blockValue));
+                    locationExtension.addExtension(blockExtension);
+                    obsCopy.addExtension(locationExtension);
+
+                    Bundle.BundleEntryComponent e = tx.addEntry().setResource(obsCopy);
+
+                    // Prefer stable identifier when available to avoid duplicate aggregates
+                    String conditionalUrl;
+                    if (o.hasIdentifier() && o.getIdentifierFirstRep().hasSystem() && o.getIdentifierFirstRep().hasValue()) {
+                        conditionalUrl = "Observation?identifier=" + o.getIdentifierFirstRep().getSystem() + "|" + o.getIdentifierFirstRep().getValue();
+                    } else {
+                        // Build conditional criteria to update existing observations instead of creating duplicates
+                        StringBuilder criteria = new StringBuilder();
+                        if (o.hasSubject() && o.getSubject().hasReference()) {
+                            criteria.append("subject=").append(o.getSubject().getReference());
+                        }
+                        if (o.hasCode() && o.getCode().hasCoding() && o.getCode().getCodingFirstRep().hasCode()) {
+                            if (criteria.length() > 0) criteria.append("&");
+                            criteria.append("code=").append(o.getCode().getCodingFirstRep().getCode());
+                        }
+                        if (o.hasEffectiveDateTimeType()) {
+                            if (criteria.length() > 0) criteria.append("&");
+                            criteria.append("date=").append(o.getEffectiveDateTimeType().getValueAsString());
+                        }
+                        conditionalUrl = "Observation?" + (criteria.length() > 0 ? criteria.toString() : "identifier=temp");
                     }
-                    if (o.hasCode() && o.getCode().hasCoding() && o.getCode().getCodingFirstRep().hasCode()) {
-                        if (criteria.length() > 0) criteria.append("&");
-                        criteria.append("code=").append(o.getCode().getCodingFirstRep().getCode());
-                    }
-                    if (o.hasEffectiveDateTimeType()) {
-                        if (criteria.length() > 0) criteria.append("&");
-                        criteria.append("date=").append(o.getEffectiveDateTimeType().getValueAsString());
-                    }
-                    conditionalUrl = "Observation?" + (criteria.length() > 0 ? criteria.toString() : "identifier=temp");
+
+                    // Use PUT with conditional URL to update existing observations or create new ones
+                    e.getRequest().setMethod(Bundle.HTTPVerb.PUT)
+                            .setUrl(conditionalUrl);
                 }
-                
-                // Use PUT with conditional URL to update existing observations or create new ones
-                e.getRequest().setMethod(Bundle.HTTPVerb.PUT)
-                    .setUrl(conditionalUrl);
+                client.transaction().withBundle(tx).execute();
             }
-            client.transaction().withBundle(tx).execute();
             return true;
         } catch (BaseServerResponseException e) {
             maybeSuppressUpstream(e, "observations");
@@ -103,47 +153,118 @@ public class UpstreamForwarder {
         }
     }
 
+    /**
+     * Sends one Patient and one Observation in a single upstream transaction.
+     * If this returns false, caller can safely fallback to the existing separate calls.
+     */
+    public boolean upsertPatientWithObservation(Patient patient, Observation observation) {
+        if (patient == null || observation == null) {
+            return false;
+        }
+        if (isUpstreamSuppressed("patients") || isUpstreamSuppressed("observations")) {
+            return false;
+        }
+
+        try {
+            Bundle tx = new Bundle().setType(Bundle.BundleType.TRANSACTION);
+
+            Bundle.BundleEntryComponent patientEntry = tx.addEntry().setResource(patient);
+            applyPatientUpsertRequest(patientEntry, patient);
+
+            Observation obsCopy = observation.copy();
+            obsCopy.setId((String) null);
+            obsCopy.getExtension().removeIf(ext -> "http://patient-location".equals(ext.getUrl()));
+            Extension locationExtension = new Extension();
+            locationExtension.setUrl("http://patient-location");
+            Extension blockExtension = new Extension();
+            blockExtension.setUrl("block");
+            blockExtension.setValue(new org.hl7.fhir.r4.model.StringType(blockValue));
+            locationExtension.addExtension(blockExtension);
+            obsCopy.addExtension(locationExtension);
+
+            Bundle.BundleEntryComponent obsEntry = tx.addEntry().setResource(obsCopy);
+            String conditionalUrl;
+            if (observation.hasIdentifier()
+                    && observation.getIdentifierFirstRep().hasSystem()
+                    && observation.getIdentifierFirstRep().hasValue()) {
+                conditionalUrl = "Observation?identifier="
+                        + observation.getIdentifierFirstRep().getSystem()
+                        + "|"
+                        + observation.getIdentifierFirstRep().getValue();
+            } else {
+                StringBuilder criteria = new StringBuilder();
+                if (observation.hasSubject() && observation.getSubject().hasReference()) {
+                    criteria.append("subject=").append(observation.getSubject().getReference());
+                }
+                if (observation.hasCode() && observation.getCode().hasCoding() && observation.getCode().getCodingFirstRep().hasCode()) {
+                    if (criteria.length() > 0) criteria.append("&");
+                    criteria.append("code=").append(observation.getCode().getCodingFirstRep().getCode());
+                }
+                if (observation.hasEffectiveDateTimeType()) {
+                    if (criteria.length() > 0) criteria.append("&");
+                    criteria.append("date=").append(observation.getEffectiveDateTimeType().getValueAsString());
+                }
+                conditionalUrl = "Observation?" + (criteria.length() > 0 ? criteria.toString() : "identifier=temp");
+            }
+            obsEntry.getRequest().setMethod(Bundle.HTTPVerb.PUT).setUrl(conditionalUrl);
+
+            client.transaction().withBundle(tx).execute();
+            return true;
+        } catch (BaseServerResponseException e) {
+            maybeSuppressUpstream(e, "patient+observations");
+            ourLog.warn("Combined patient+observation forward failed: {}", e.getMessage());
+            return false;
+        } catch (Exception e) {
+            maybeSuppressOnConnectivityFailure(e, "patient+observations");
+            ourLog.warn("Combined patient+observation forward failed: {}", e.getMessage());
+            return false;
+        }
+    }
+
     public void upsertMeasureReports(List<MeasureReport> measureReports) {
         if (measureReports == null || measureReports.isEmpty()) return;
         if (isUpstreamSuppressed("measure-reports")) return;
         try {
-            Bundle tx = new Bundle().setType(Bundle.BundleType.TRANSACTION);
-            for (MeasureReport report : measureReports) {
-                MeasureReport reportCopy = report.copy();
+            int chunkSize = Math.max(25, measureReportTxChunkSize);
+            for (int start = 0; start < measureReports.size(); start += chunkSize) {
+                int end = Math.min(measureReports.size(), start + chunkSize);
+                Bundle tx = new Bundle().setType(Bundle.BundleType.TRANSACTION);
+                for (MeasureReport report : measureReports.subList(start, end)) {
+                    MeasureReport reportCopy = report.copy();
 
-                reportCopy.getExtension().removeIf(ext -> "http://patient-location".equals(ext.getUrl()));
-                Extension locationExtension = new Extension();
-                locationExtension.setUrl("http://patient-location");
-                Extension blockExtension = new Extension();
-                blockExtension.setUrl("block");
-                blockExtension.setValue(new org.hl7.fhir.r4.model.StringType(blockValue));
-                locationExtension.addExtension(blockExtension);
-                reportCopy.addExtension(locationExtension);
+                    reportCopy.getExtension().removeIf(ext -> "http://patient-location".equals(ext.getUrl()));
+                    Extension locationExtension = new Extension();
+                    locationExtension.setUrl("http://patient-location");
+                    Extension blockExtension = new Extension();
+                    blockExtension.setUrl("block");
+                    blockExtension.setValue(new org.hl7.fhir.r4.model.StringType(blockValue));
+                    locationExtension.addExtension(blockExtension);
+                    reportCopy.addExtension(locationExtension);
 
-                Bundle.BundleEntryComponent entry = tx.addEntry().setResource(reportCopy);
-                String reportId = reportCopy.getIdElement().getIdPart();
+                    Bundle.BundleEntryComponent entry = tx.addEntry().setResource(reportCopy);
+                    String reportId = reportCopy.getIdElement().getIdPart();
 
-                if (reportId != null && !reportId.isBlank()) {
-                    entry.getRequest()
-                            .setMethod(Bundle.HTTPVerb.PUT)
-                            .setUrl("MeasureReport/" + reportId);
-                } else if (reportCopy.hasIdentifier()
-                        && reportCopy.getIdentifierFirstRep().hasSystem()
-                        && reportCopy.getIdentifierFirstRep().hasValue()) {
-                    entry.getRequest()
-                            .setMethod(Bundle.HTTPVerb.PUT)
-                            .setUrl("MeasureReport?identifier="
-                                    + reportCopy.getIdentifierFirstRep().getSystem()
-                                    + "|"
-                                    + reportCopy.getIdentifierFirstRep().getValue());
-                } else {
-                    entry.getRequest()
-                            .setMethod(Bundle.HTTPVerb.POST)
-                            .setUrl("MeasureReport");
+                    if (reportId != null && !reportId.isBlank()) {
+                        entry.getRequest()
+                                .setMethod(Bundle.HTTPVerb.PUT)
+                                .setUrl("MeasureReport/" + reportId);
+                    } else if (reportCopy.hasIdentifier()
+                            && reportCopy.getIdentifierFirstRep().hasSystem()
+                            && reportCopy.getIdentifierFirstRep().hasValue()) {
+                        entry.getRequest()
+                                .setMethod(Bundle.HTTPVerb.PUT)
+                                .setUrl("MeasureReport?identifier="
+                                        + reportCopy.getIdentifierFirstRep().getSystem()
+                                        + "|"
+                                        + reportCopy.getIdentifierFirstRep().getValue());
+                    } else {
+                        entry.getRequest()
+                                .setMethod(Bundle.HTTPVerb.POST)
+                                .setUrl("MeasureReport");
+                    }
                 }
+                client.transaction().withBundle(tx).execute();
             }
-
-            client.transaction().withBundle(tx).execute();
         } catch (BaseServerResponseException e) {
             maybeSuppressUpstream(e, "measure-reports");
             ourLog.error("ERROR forwarding measure reports: {}", e.getMessage());
@@ -306,23 +427,28 @@ public class UpstreamForwarder {
             
             // Step 1: Ensure all referenced patients exist upstream first
             if (!referencedPatients.isEmpty()) {
-                Bundle patientTx = new Bundle().setType(Bundle.BundleType.TRANSACTION);
-                for (String patientId : referencedPatients.keySet()) {
-                    Bundle.BundleEntryComponent patientEntry = patientTx.addEntry();
-                    // Create-only placeholder: do NOT overwrite existing upstream patients
-                    patientEntry.setFullUrl("urn:uuid:patient-" + patientId);
-                    patientEntry.getRequest()
-                        .setMethod(Bundle.HTTPVerb.POST)
-                        .setUrl("Patient")
-                        .setIfNoneExist("_id=" + patientId);
-                    // Minimal patient placeholder only if missing upstream
-                    Patient placeholderPatient = new Patient();
-                    placeholderPatient.setId(patientId);
-                    placeholderPatient.setActive(true);
-                    patientEntry.setResource(placeholderPatient);
-                }
+                int patientChunk = Math.max(50, patientTxChunkSize);
+                List<String> patientIds = new ArrayList<>(referencedPatients.keySet());
                 try {
-                    client.transaction().withBundle(patientTx).execute();
+                    for (int start = 0; start < patientIds.size(); start += patientChunk) {
+                        int end = Math.min(patientIds.size(), start + patientChunk);
+                        Bundle patientTx = new Bundle().setType(Bundle.BundleType.TRANSACTION);
+                        for (String patientId : patientIds.subList(start, end)) {
+                            Bundle.BundleEntryComponent patientEntry = patientTx.addEntry();
+                            // Create-only placeholder: do NOT overwrite existing upstream patients
+                            patientEntry.setFullUrl("urn:uuid:patient-" + patientId);
+                            patientEntry.getRequest()
+                                    .setMethod(Bundle.HTTPVerb.POST)
+                                    .setUrl("Patient")
+                                    .setIfNoneExist("_id=" + patientId);
+                            // Minimal patient placeholder only if missing upstream
+                            Patient placeholderPatient = new Patient();
+                            placeholderPatient.setId(patientId);
+                            placeholderPatient.setActive(true);
+                            patientEntry.setResource(placeholderPatient);
+                        }
+                        client.transaction().withBundle(patientTx).execute();
+                    }
                     ourLog.debug("Ensured {} patients exist upstream", referencedPatients.size());
                 } catch (Exception e) {
                     ourLog.warn("Some patients may not exist upstream: {}", e.getMessage());
@@ -332,57 +458,62 @@ public class UpstreamForwarder {
             
             // Step 2: Post all Observations and get their new IDs
             if (observations != null && !observations.isEmpty()) {
-                Bundle obsTx = new Bundle().setType(Bundle.BundleType.TRANSACTION);
-                
-                for (Observation obs : observations) {
-                    Observation obsCopy = obs.copy();
-                    obsCopy.setId((String) null);
-                    
-                    // Remove any existing location extensions and add the hardcoded one
-                    obsCopy.getExtension().removeIf(ext -> "http://patient-location".equals(ext.getUrl()));
-                    
-                    Extension locationExtension = new Extension();
-                    locationExtension.setUrl("http://patient-location");
-                    Extension blockExtension = new Extension();
-                    blockExtension.setUrl("block");
-                    blockExtension.setValue(new org.hl7.fhir.r4.model.StringType(blockValue));
-                    locationExtension.addExtension(blockExtension);
-                    obsCopy.addExtension(locationExtension);
-                    
-                    Bundle.BundleEntryComponent e = obsTx.addEntry().setResource(obsCopy);
-                    
-                    // Use conditional create to avoid duplicates and numeric ID issues
-                    // Build search criteria based on patient, code, and effective date
-                    StringBuilder criteria = new StringBuilder();
-                    if (obs.hasSubject() && obs.getSubject().hasReference()) {
-                        criteria.append("subject=").append(obs.getSubject().getReference());
+                int obsChunk = Math.max(50, observationTxChunkSize);
+                for (int start = 0; start < observations.size(); start += obsChunk) {
+                    int end = Math.min(observations.size(), start + obsChunk);
+                    List<Observation> obsSlice = observations.subList(start, end);
+
+                    Bundle obsTx = new Bundle().setType(Bundle.BundleType.TRANSACTION);
+                    for (Observation obs : obsSlice) {
+                        Observation obsCopy = obs.copy();
+                        obsCopy.setId((String) null);
+
+                        // Remove any existing location extensions and add the hardcoded one
+                        obsCopy.getExtension().removeIf(ext -> "http://patient-location".equals(ext.getUrl()));
+
+                        Extension locationExtension = new Extension();
+                        locationExtension.setUrl("http://patient-location");
+                        Extension blockExtension = new Extension();
+                        blockExtension.setUrl("block");
+                        blockExtension.setValue(new org.hl7.fhir.r4.model.StringType(blockValue));
+                        locationExtension.addExtension(blockExtension);
+                        obsCopy.addExtension(locationExtension);
+
+                        Bundle.BundleEntryComponent e = obsTx.addEntry().setResource(obsCopy);
+
+                        // Use conditional create to avoid duplicates and numeric ID issues
+                        // Build search criteria based on patient, code, and effective date
+                        StringBuilder criteria = new StringBuilder();
+                        if (obs.hasSubject() && obs.getSubject().hasReference()) {
+                            criteria.append("subject=").append(obs.getSubject().getReference());
+                        }
+                        if (obs.hasCode() && obs.getCode().hasCoding() && obs.getCode().getCodingFirstRep().hasCode()) {
+                            if (criteria.length() > 0) criteria.append("&");
+                            criteria.append("code=").append(obs.getCode().getCodingFirstRep().getCode());
+                        }
+                        if (obs.hasEffectiveDateTimeType()) {
+                            if (criteria.length() > 0) criteria.append("&");
+                            criteria.append("date=").append(obs.getEffectiveDateTimeType().getValueAsString());
+                        }
+
+                        // Use conditional UPDATE (PUT) to update existing observations or create new ones
+                        e.getRequest()
+                                .setMethod(Bundle.HTTPVerb.PUT)
+                                .setUrl("Observation?" + (criteria.length() > 0 ? criteria.toString() : "identifier=temp"));
                     }
-                    if (obs.hasCode() && obs.getCode().hasCoding() && obs.getCode().getCodingFirstRep().hasCode()) {
-                        if (criteria.length() > 0) criteria.append("&");
-                        criteria.append("code=").append(obs.getCode().getCodingFirstRep().getCode());
-                    }
-                    if (obs.hasEffectiveDateTimeType()) {
-                        if (criteria.length() > 0) criteria.append("&");
-                        criteria.append("date=").append(obs.getEffectiveDateTimeType().getValueAsString());
-                    }
-                    
-                    // Use conditional UPDATE (PUT) to update existing observations or create new ones
-                    e.getRequest()
-                        .setMethod(Bundle.HTTPVerb.PUT)
-                        .setUrl("Observation?" + (criteria.length() > 0 ? criteria.toString() : "identifier=temp"));
-                }
-                
-                // Execute Observation transaction and map old IDs to new IDs
-                Bundle obsResponse = client.transaction().withBundle(obsTx).execute();
-                for (int i = 0; i < observations.size(); i++) {
-                    String oldId = observations.get(i).getIdElement().getIdPart();
-                    if (obsResponse.getEntry().size() > i && obsResponse.getEntry().get(i).hasResponse()) {
-                        String location = obsResponse.getEntry().get(i).getResponse().getLocation();
-                        if (location != null) {
-                            // Extract new ID from location header (e.g., "Observation/123/_history/1")
-                            String newId = extractIdFromLocation(location);
-                            if (newId != null) {
-                                oldToNewObservationIds.put(oldId, newId);
+
+                    // Execute Observation transaction and map old IDs to new IDs
+                    Bundle obsResponse = client.transaction().withBundle(obsTx).execute();
+                    for (int i = 0; i < obsSlice.size(); i++) {
+                        String oldId = obsSlice.get(i).getIdElement().getIdPart();
+                        if (obsResponse.getEntry().size() > i && obsResponse.getEntry().get(i).hasResponse()) {
+                            String location = obsResponse.getEntry().get(i).getResponse().getLocation();
+                            if (location != null) {
+                                // Extract new ID from location header (e.g., "Observation/123/_history/1")
+                                String newId = extractIdFromLocation(location);
+                                if (newId != null) {
+                                    oldToNewObservationIds.put(oldId, newId);
+                                }
                             }
                         }
                     }
@@ -393,46 +524,50 @@ public class UpstreamForwarder {
             }
             
             // Step 3: Update Condition references and post Conditions
-            Bundle conditionTx = new Bundle().setType(Bundle.BundleType.TRANSACTION);
-            
-            for (Condition c : conditions) {
-                // Create a copy and preserve deterministic ID for stable upstream upsert
-                Condition conditionCopy = c.copy();
-                
-                // Update Observation references in evidence
-                if (conditionCopy.hasEvidence()) {
-                    for (Condition.ConditionEvidenceComponent evidence : conditionCopy.getEvidence()) {
-                        for (Reference ref : evidence.getDetail()) {
-                            if (ref.getReference() != null && ref.getReference().startsWith("Observation/")) {
-                                String oldObsId = ref.getReference().substring("Observation/".length());
-                                String newObsId = oldToNewObservationIds.get(oldObsId);
-                                if (newObsId != null) {
-                                    ref.setReference("Observation/" + newObsId);
+            int condChunk = Math.max(50, conditionTxChunkSize);
+            for (int start = 0; start < conditions.size(); start += condChunk) {
+                int end = Math.min(conditions.size(), start + condChunk);
+                Bundle conditionTx = new Bundle().setType(Bundle.BundleType.TRANSACTION);
+
+                for (Condition c : conditions.subList(start, end)) {
+                    // Create a copy and preserve deterministic ID for stable upstream upsert
+                    Condition conditionCopy = c.copy();
+
+                    // Update Observation references in evidence
+                    if (conditionCopy.hasEvidence()) {
+                        for (Condition.ConditionEvidenceComponent evidence : conditionCopy.getEvidence()) {
+                            for (Reference ref : evidence.getDetail()) {
+                                if (ref.getReference() != null && ref.getReference().startsWith("Observation/")) {
+                                    String oldObsId = ref.getReference().substring("Observation/".length());
+                                    String newObsId = oldToNewObservationIds.get(oldObsId);
+                                    if (newObsId != null) {
+                                        ref.setReference("Observation/" + newObsId);
+                                    }
                                 }
                             }
                         }
                     }
-                }
-                
-                Bundle.BundleEntryComponent e = conditionTx.addEntry().setResource(conditionCopy);
 
-                String conditionId = conditionCopy.getIdElement().getIdPart();
-                if (conditionId != null && !conditionId.isBlank()) {
-                    // Stable ID-based upsert
-                    e.getRequest()
-                        .setMethod(Bundle.HTTPVerb.PUT)
-                        .setUrl("Condition/" + conditionId);
-                } else {
-                    // Fallback conditional upsert
-                    String patientRef = c.getSubject().getReference();
-                    String code = c.getCode().getCodingFirstRep().getCode();
-                    e.getRequest()
-                        .setMethod(Bundle.HTTPVerb.PUT)
-                        .setUrl("Condition?patient=" + patientRef + "&code=" + code + "&clinical-status=active");
+                    Bundle.BundleEntryComponent e = conditionTx.addEntry().setResource(conditionCopy);
+
+                    String conditionId = conditionCopy.getIdElement().getIdPart();
+                    if (conditionId != null && !conditionId.isBlank()) {
+                        // Stable ID-based upsert
+                        e.getRequest()
+                                .setMethod(Bundle.HTTPVerb.PUT)
+                                .setUrl("Condition/" + conditionId);
+                    } else {
+                        // Fallback conditional upsert
+                        String patientRef = c.getSubject().getReference();
+                        String code = c.getCode().getCodingFirstRep().getCode();
+                        e.getRequest()
+                                .setMethod(Bundle.HTTPVerb.PUT)
+                                .setUrl("Condition?patient=" + patientRef + "&code=" + code + "&clinical-status=active");
+                    }
                 }
+
+                client.transaction().withBundle(conditionTx).execute();
             }
-            
-            client.transaction().withBundle(conditionTx).execute();
             
         } catch (BaseServerResponseException e) {
             maybeSuppressUpstream(e, "conditions");

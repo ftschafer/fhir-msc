@@ -4,6 +4,7 @@ import ca.uhn.fhir.interceptor.api.Hook;
 import ca.uhn.fhir.interceptor.api.Pointcut;
 import ca.uhn.fhir.rest.api.server.RequestDetails;
 import ca.uhn.fhir.rest.api.server.storage.TransactionDetails;
+import io.micrometer.core.instrument.Timer;
 import org.hl7.fhir.r4.model.Observation;
 import org.springframework.stereotype.Component;
 
@@ -17,9 +18,11 @@ public class News2AggregationInterceptorDB {
     private static final String TX_DONE = "NEWS2_DONE";
 
     private final News2AggregationService service;
+    private final PerfMetricsService perfMetrics;
 
-    public News2AggregationInterceptorDB(News2AggregationService service) {
+    public News2AggregationInterceptorDB(News2AggregationService service, PerfMetricsService perfMetrics) {
         this.service = service;
+        this.perfMetrics = perfMetrics;
     }
 
     @Hook(Pointcut.STORAGE_PRECOMMIT_RESOURCE_CREATED)
@@ -57,6 +60,7 @@ public class News2AggregationInterceptorDB {
             return;
         }
 
+        Timer.Sample sample = Timer.start();
         try {
             // 1) Aggregate observations -> DB upserts
             Set<String> patients = service.processObservations(obs);
@@ -65,6 +69,7 @@ public class News2AggregationInterceptorDB {
                 service.updatePatientNews2IfChanged(pid);
             }
         } finally {
+            sample.stop(perfMetrics.news2InterceptorTimer);
             tx.putUserData(TX_DONE, Boolean.TRUE);
         }
     }

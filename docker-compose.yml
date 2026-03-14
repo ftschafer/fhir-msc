@@ -27,6 +27,8 @@ services:
 
       # Forwarding target (set empty to disable in code, or point to another FHIR base URL)
       UPSTREAM_FHIR_BASE_URL: "${UPSTREAM_FHIR_BASE_URL:-http://localhost:8081/fhir}"
+      # JVM memory/GC defaults for bulk ingestion stability
+      JAVA_TOOL_OPTIONS: "${JAVA_TOOL_OPTIONS:--Xms1g -Xmx3g -XX:+UseG1GC -XX:MaxGCPauseMillis=200 -XX:+UseStringDeduplication -XX:+HeapDumpOnOutOfMemoryError}"
     volumes:
       - ./custom:/app/custom
       - ./configs:/app/configs

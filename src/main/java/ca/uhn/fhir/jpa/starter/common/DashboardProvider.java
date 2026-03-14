@@ -49,12 +49,16 @@ public class DashboardProvider implements IResourceProvider {
     
     @Value("${hapi.fhir.location.block:}")
     private String currentBlock;
+
+    @Value("${dashboard.stats.cache-duration-ms:15000}")
+    private long cacheDurationMs;
+
+    @Value("${dashboard.stats.bootstrap-samples:120}")
+    private int bootstrapSamples;
     
-    // Cache results for 30 seconds
+    // Cache results for a short window to absorb dashboard polling bursts.
     private DashboardStats cachedStats;
     private long cacheTimestamp = 0;
-    private static final long CACHE_DURATION_MS = 3000;
-    private static final int BOOTSTRAP_SAMPLES = 300;
 
     private final PerfMetricsService perfMetrics;
 
@@ -82,7 +86,7 @@ public class DashboardProvider implements IResourceProvider {
 
             // Check cache
             long now = System.currentTimeMillis();
-            if (cachedStats != null && (now - cacheTimestamp) < CACHE_DURATION_MS) {
+            if (cachedStats != null && (now - cacheTimestamp) < cacheDurationMs) {
                 sample.stop(perfMetrics.dashboardTimer);
                 writeJsonResponse(response, cachedStats);
                 return;
@@ -243,7 +247,7 @@ public class DashboardProvider implements IResourceProvider {
         for (LocationStats stat : locationStats) {
             stat.computeDistributionMetrics();
             stat.computeRates();
-            double[] ci = bootstrapMeanConfidenceInterval(stat.news2Values, 0.95, BOOTSTRAP_SAMPLES);
+            double[] ci = bootstrapMeanConfidenceInterval(stat.news2Values, 0.95, bootstrapSamples);
             stat.bootstrapMeanCiLow = ci[0];
             stat.bootstrapMeanCiHigh = ci[1];
         }

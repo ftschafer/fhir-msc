@@ -368,8 +368,15 @@ public class News2AggregationService {
             Timer.Sample upstreamTimer = Timer.start(meterRegistry);
             Observation blockAverageObservation = toBlockAverageObservation(blockAverage);
             upsertLocalBlockAverageObservation(blockAverageObservation);
-            upstreamForwarder.upsertPatients(List.of(patient));
-            upstreamForwarder.createObservations(List.of(blockAverageObservation));
+            boolean combinedOk = upstreamForwarder.upsertPatientWithObservation(patient, blockAverageObservation);
+            if (combinedOk) {
+                meterRegistry.counter("fhir.upstream.news2_combined_forward_success_total").increment();
+            } else {
+                meterRegistry.counter("fhir.upstream.news2_combined_forward_fallback_total").increment();
+                // Preserve existing behavior if combined transaction fails.
+                upstreamForwarder.upsertPatients(List.of(patient));
+                upstreamForwarder.createObservations(List.of(blockAverageObservation));
+            }
             upstreamTimer.stop(
                     Timer.builder(METRIC_UPSTREAM)
                             .description("Time spent forwarding patients upstream")

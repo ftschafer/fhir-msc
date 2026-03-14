@@ -68,8 +68,8 @@ public class ScheduledDiseaseAnalysisService {
         "AsthmaDetection"
     };
 
-    // Run every 5 minutes (300000 ms)
-    @Scheduled(fixedDelay = 3000, initialDelay = 20000)
+    // Run every 15 seconds (15000 ms)
+    @Scheduled(fixedDelay = 15000, initialDelay = 10000)
     public void analyzeAllPatients() {
         logger.info("========================================");
         logger.info("SCHEDULED DISEASE ANALYSIS - Starting");

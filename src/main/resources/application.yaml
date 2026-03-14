@@ -116,7 +116,9 @@ hapi:
         fixed-block-income: 3200
         kmeans:
           max-k: 4
-          runs: 8
+          runs: 5
+          max-iterations: 25
+          silhouette-sample-size: 500
           min-silhouette: 0.2
           min-cluster-size: 2
           max-singleton-ratio: 0.2
@@ -124,6 +126,13 @@ hapi:
           weight-systolic-pressure: 1.0
           weight-age: 1.1
           weight-active-conditions: 1.2
+
+    news2:
+      queue:
+        max-size: 15000
+      batch:
+        size: 1000
+        fixed-delay-ms: 75
 
     measure-report:
       block-health:
@@ -248,6 +257,7 @@ hapi:
     #    allow_override_default_search_params: true
     #    auto_create_placeholder_reference_targets: false
     #    mass_ingestion_mode_enabled: false
+    mass_ingestion_mode_enabled: true
     ### tells the server to automatically append the current version of the target resource to references at these paths
     #    auto_version_reference_at_paths: Device.patient, Device.location, Device.parent, DeviceMetric.parent, DeviceMetric.source, Observation.device, Observation.subject
     #    ips_enabled: false
@@ -405,3 +415,31 @@ logging:
 upstream:
   fhir:
     base-url: http://localhost:8081/fhir
+  client:
+    connect-timeout-ms: 2000
+    socket-timeout-ms: 10000
+    connection-request-timeout-ms: 2000
+    pool-max-total: 200
+    pool-max-per-route: 100
+  tx:
+    chunk:
+      observations: 300
+      measure-reports: 150
+      conditions: 150
+      patients: 200
+  reconcile:
+    patients:
+      enabled: true
+      chunk-size: 300
+      initial-delay-ms: 60000
+      fixed-delay-ms: 300000
+    conditions:
+      enabled: true
+      chunk-size: 200
+      initial-delay-ms: 60000
+      fixed-delay-ms: 180000
+
+dashboard:
+  stats:
+    cache-duration-ms: 15000
+    bootstrap-samples: 120
